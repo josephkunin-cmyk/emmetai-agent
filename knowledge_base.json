@@ -1,0 +1,28 @@
+{
+  "announcements": [
+    "Banyan Communications is now serving Lancaster County and Holmes County communities.",
+    "Our phone agent Emmet is available 24 hours a day, 7 days a week."
+  ],
+  "entries": [
+    {
+      "question": "What is Banyan Communications?",
+      "answer": "Banyan Communications LLC provides an AI phone assistant called Emmet that anyone can call from a landline or shared phone. No internet needed — just dial and talk."
+    },
+    {
+      "question": "How do I use this service?",
+      "answer": "Just call our number anytime, day or night. Ask your question out loud, and Emmet will answer. When you're done, just say goodbye."
+    },
+    {
+      "question": "Does this require a computer or smartphone?",
+      "answer": "Not at all. Our service works with any telephone — landline, phone shanty, or shared community phone. No internet, no apps, no screens."
+    },
+    {
+      "question": "How much does it cost?",
+      "answer": "Our Basic plan is $9 per month for one household. We also have Community and Business plans. Visit emmetai.com or call us for details."
+    },
+    {
+      "question": "What can I ask Emmet?",
+      "answer": "You can ask about just about anything — weather, health questions, recipes, farming tips, measurements and conversions, spelling help, business hours, and much more."
+    }
+  ]
+}
