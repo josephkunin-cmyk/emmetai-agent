@@ -88,11 +88,35 @@ def check_voice_twiml(base_url: str) -> CheckResult:
         return CheckResult("voice_twiML", False, "No <Gather> in /voice response")
 
     action = gather_nodes[0].attrib.get("action", "")
-    if "/gather" not in action:
+    if action not in {"/intro-name", "/gather"}:
         return CheckResult(
-            "voice_twiML", False, f"Gather action missing /gather (action={action!r})"
+            "voice_twiML",
+            False,
+            f"Unexpected gather action in /voice (action={action!r})",
         )
     return CheckResult("voice_twiML", True, f"Gather action={action}")
+
+
+def check_intro_name(base_url: str) -> CheckResult:
+    url = f"{base_url}/intro-name"
+    form = {
+        "CallSid": "CA_PREFLIGHT_NAME_001",
+        "From": "+15555550123",
+        "SpeechResult": "My name is Jacob",
+    }
+    try:
+        xml_text = http_post_form(url, form=form)
+        root = parse_twiml(xml_text)
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("intro_name", False, f"POST {url} failed: {exc}")
+
+    gather_nodes = root.findall(".//Gather")
+    if not gather_nodes:
+        return CheckResult("intro_name", False, "No <Gather> in /intro-name response")
+    action = gather_nodes[0].attrib.get("action", "")
+    if action != "/gather":
+        return CheckResult("intro_name", False, f"Expected action /gather, got {action!r}")
+    return CheckResult("intro_name", True, "Name capture flow is active")
 
 
 def check_ai_response(base_url: str, sample_question: str) -> CheckResult:
@@ -222,6 +246,7 @@ def main() -> int:
     results: list[CheckResult] = [
         check_health(base_url),
         check_voice_twiml(base_url),
+        check_intro_name(base_url),
         check_ai_response(base_url, args.sample_question),
     ]
 

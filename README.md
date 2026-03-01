@@ -52,20 +52,39 @@ Optional:
 - `FREE_DAILY_QUERIES` (default `5`)
 - `BUSINESS_TIMEZONE` (default `America/New_York`)
 - `DB_PATH` (default `./hotline_usage.db`)
+- `VOICE_NAME` (default `Polly.Joanna`)
 - `UPGRADE_MESSAGE` (spoken when limit is hit)
 - `SERVICE_SCOPE_MESSAGE` (spoken for out-of-scope requests)
 - `SERVICE_GREETING` (first greeting text)
+- `TWILIO_MESSAGING_FROM` (needed to SMS payment links)
+- `SQUARE_ACCESS_TOKEN`
+- `SQUARE_LOCATION_ID`
+- `SQUARE_ENVIRONMENT` (`production` or `sandbox`)
+- `SQUARE_API_VERSION`
+- `SQUARE_CURRENCY` (default `USD`)
+- `SQUARE_DAILY_UNLOCK_CENTS` (default `500`)
+- `SQUARE_WEBHOOK_SIGNATURE_KEY` (recommended)
+- `PUBLIC_BASE_URL` (used for webhook/payment redirects)
 - `PORT` (Render sets this automatically)
 
 ## Limits and guardrails behavior
 
 - The service enforces a daily per-caller cap (`FREE_DAILY_QUERIES`, default 5).
 - Caller identity is based on Twilio `From` phone number.
-- After the limit is reached, Emmet stops answering and plays `UPGRADE_MESSAGE`.
+- The intro now asks for caller name before Q&A starts.
+- After the limit is reached, Emmet generates a Square payment link and attempts to SMS it to the caller.
+- Once Square confirms payment (`/square-webhook`), the caller is unlocked for paid access for the rest of that day.
 - Guardrails include:
   - emergency escalation to 911/988 language,
   - refusal of harmful/illegal/explicit requests,
   - scope steering to agriculture/equestrian/homestead/rural practical topics.
+
+## Square webhook URL
+
+Configure this in Square Dashboard:
+
+- Endpoint: `https://emmetai-agent.onrender.com/square-webhook`
+- Events: `payment.created`, `payment.updated`
 
 ## Local run
 
