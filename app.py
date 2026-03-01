@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -153,6 +154,21 @@ class UsageStore:
                     paid_at TEXT,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS call_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    call_sid TEXT NOT NULL,
+                    caller_phone TEXT NOT NULL,
+                    caller_name TEXT,
+                    turn_number INTEGER NOT NULL DEFAULT 1,
+                    user_message TEXT NOT NULL,
+                    assistant_message TEXT NOT NULL,
+                    latency_ms INTEGER,
+                    usage_date TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_call_logs_sid ON call_logs(call_sid);
+                CREATE INDEX IF NOT EXISTS idx_call_logs_date ON call_logs(usage_date);
                 """
             )
             conn.commit()
@@ -299,6 +315,34 @@ class UsageStore:
                 (order_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def log_turn(
+        self,
+        call_sid: str,
+        caller_phone: str,
+        caller_name: str,
+        user_message: str,
+        assistant_message: str,
+        latency_ms: int,
+    ) -> None:
+        """Write a single Q&A turn to the call_logs table."""
+        now_iso = self._now_iso()
+        usage_date = now_iso[:10]
+        with self._connect() as conn:
+            turn_number = (conn.execute(
+                "SELECT COUNT(*) FROM call_logs WHERE call_sid = ?", (call_sid,)
+            ).fetchone()[0] or 0) + 1
+            conn.execute(
+                """
+                INSERT INTO call_logs
+                    (call_sid, caller_phone, caller_name, turn_number,
+                     user_message, assistant_message, latency_ms, usage_date, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (call_sid, caller_phone, caller_name or "", turn_number,
+                 user_message, assistant_message, latency_ms, usage_date, now_iso),
+            )
+            conn.commit()
 
     def mark_checkout_paid(self, order_id: str) -> None:
         now_iso = self._now_iso()
@@ -619,24 +663,39 @@ def get_anthropic_client():
     return anthropic_client
 
 
-def ask_claude(call_sid, user_message):
-    """Send message to Claude and get a response."""
+def ask_claude(call_sid: str, user_message: str) -> str:
+    """Send message to Claude Haiku with prompt caching for low latency."""
     history = get_conversation(call_sid)
     history.append({"role": "user", "content": user_message})
 
     logger.info(f"[{call_sid[:8]}] Caller: {user_message}")
 
+    t0 = time.monotonic()
+
+    # Use prompt caching on the system prompt — cuts repeat-call latency ~60%
     response = get_anthropic_client().messages.create(
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=300,
-        system=build_system_prompt(),
-        messages=history
+        model="claude-haiku-4-5-20251001",   # 3-5x faster than Sonnet
+        max_tokens=150,                        # phone answers are short
+        system=[
+            {
+                "type": "text",
+                "text": build_system_prompt(),
+                "cache_control": {"type": "ephemeral"},   # cache the prompt
+            }
+        ],
+        messages=history,
     )
 
-    assistant_message = response.content[0].text
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    assistant_message = response.content[0].text.strip()
     history.append({"role": "assistant", "content": assistant_message})
 
-    logger.info(f"[{call_sid[:8]}] Emmet: {assistant_message}")
+    logger.info(f"[{call_sid[:8]}] Emmet ({latency_ms}ms): {assistant_message}")
+
+    # Write turn to call log
+    caller_id = call_metadata.get(call_sid, {}).get("from", "unknown")
+    caller_name = call_metadata.get(call_sid, {}).get("caller_name", "")
+    usage_store.log_turn(call_sid, caller_id, caller_name, user_message, assistant_message, latency_ms)
 
     # Keep conversation history manageable (last 20 turns)
     if len(history) > 20:
@@ -658,10 +717,12 @@ def twiml_listen(
         input="speech",
         action=action,
         method="POST",
-        speech_timeout="auto",
+        speech_timeout="2",       # 2s silence = end of turn (was "auto" ~3-4s)
         speech_model="phone_call",
         enhanced=True,
-        language="en-US"
+        language="en-US",
+        profanity_filter=False,   # faster transcription
+        action_on_empty_result=False,
     )
     gather.say(text, voice=VOICE_NAME, language="en-US")
     resp.append(gather)
@@ -969,14 +1030,38 @@ def health():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "service": "Emmet AI — Banyan Communications",
+        "service": "Emmet AI",
+        "phone": "+17179225968",
         "active_calls": len(conversations),
         "anthropic_configured": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
+        "model": "claude-haiku-4-5-20251001",
         "free_daily_queries": FREE_DAILY_QUERIES,
         "business_timezone": BUSINESS_TIMEZONE,
         "square_configured": bool(SQUARE_ACCESS_TOKEN and SQUARE_LOCATION_ID),
         "voice_name": VOICE_NAME,
     }
+
+
+@app.route("/logs", methods=["GET"])
+def logs():
+    """View recent call logs (last 50 turns)."""
+    date = request.args.get("date", business_today_iso())
+    with usage_store._connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT call_sid, caller_phone, caller_name, turn_number,
+                   user_message, assistant_message, latency_ms, created_at
+            FROM call_logs
+            WHERE usage_date = ?
+            ORDER BY created_at DESC
+            LIMIT 50
+            """,
+            (date,),
+        ).fetchall()
+    return Response(
+        json.dumps([dict(r) for r in rows], indent=2),
+        mimetype="application/json",
+    )
 
 
 # ── Entry Point ──────────────────────────────────────────────────────────
