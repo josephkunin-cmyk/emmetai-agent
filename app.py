@@ -23,7 +23,7 @@ logger = logging.getLogger("emmet")
 
 # ── App Setup ────────────────────────────────────────────────────────────
 app = Flask(__name__)
-client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+anthropic_client = None
 
 # In-memory conversation store keyed by Twilio CallSid
 conversations = {}
@@ -113,6 +113,20 @@ def get_conversation(call_sid):
     return conversations[call_sid]
 
 
+def get_anthropic_client():
+    """Lazily initialize the Anthropic client so boot never fails."""
+    global anthropic_client
+    if anthropic_client is not None:
+        return anthropic_client
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    anthropic_client = Anthropic(api_key=api_key)
+    return anthropic_client
+
+
 def ask_claude(call_sid, user_message):
     """Send message to Claude and get a response."""
     history = get_conversation(call_sid)
@@ -120,7 +134,7 @@ def ask_claude(call_sid, user_message):
 
     logger.info(f"[{call_sid[:8]}] Caller: {user_message}")
 
-    response = client.messages.create(
+    response = get_anthropic_client().messages.create(
         model="claude-sonnet-4-5-20250929",
         max_tokens=300,
         system=build_system_prompt(),
@@ -298,7 +312,8 @@ def health():
     return {
         "status": "ok",
         "service": "Emmet AI — Banyan Communications",
-        "active_calls": len(conversations)
+        "active_calls": len(conversations),
+        "anthropic_configured": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
     }
 
 
