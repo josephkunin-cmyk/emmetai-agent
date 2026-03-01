@@ -49,7 +49,23 @@ Expected Twilio configuration:
 - `PYTHON_VERSION=3.11.10`
 
 Optional:
+- `FREE_DAILY_QUERIES` (default `5`)
+- `BUSINESS_TIMEZONE` (default `America/New_York`)
+- `DB_PATH` (default `./hotline_usage.db`)
+- `UPGRADE_MESSAGE` (spoken when limit is hit)
+- `SERVICE_SCOPE_MESSAGE` (spoken for out-of-scope requests)
+- `SERVICE_GREETING` (first greeting text)
 - `PORT` (Render sets this automatically)
+
+## Limits and guardrails behavior
+
+- The service enforces a daily per-caller cap (`FREE_DAILY_QUERIES`, default 5).
+- Caller identity is based on Twilio `From` phone number.
+- After the limit is reached, Emmet stops answering and plays `UPGRADE_MESSAGE`.
+- Guardrails include:
+  - emergency escalation to 911/988 language,
+  - refusal of harmful/illegal/explicit requests,
+  - scope steering to agriculture/equestrian/homestead/rural practical topics.
 
 ## Local run
 
