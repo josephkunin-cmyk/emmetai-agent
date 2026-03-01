@@ -169,6 +169,33 @@ class UsageStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_call_logs_sid ON call_logs(call_sid);
                 CREATE INDEX IF NOT EXISTS idx_call_logs_date ON call_logs(usage_date);
+
+                CREATE TABLE IF NOT EXISTS knowledge_updates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_type TEXT NOT NULL,
+                    question TEXT,
+                    answer TEXT,
+                    announcement TEXT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS marketplace_listings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    price TEXT,
+                    location TEXT,
+                    contact TEXT,
+                    status TEXT NOT NULL DEFAULT 'available',
+                    listed_by TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_market_category ON marketplace_listings(category);
+                CREATE INDEX IF NOT EXISTS idx_market_status ON marketplace_listings(status);
                 """
             )
             conn.commit()
@@ -583,12 +610,27 @@ def apply_paid_event_from_square(payment: dict) -> None:
 KNOWLEDGE_BASE_PATH = os.path.join(os.path.dirname(__file__), "knowledge_base.json")
 
 def load_knowledge_base():
-    """Load the local knowledge base from JSON file."""
+    """Load knowledge base — DB overrides first, then falls back to JSON file."""
     try:
         with open(KNOWLEDGE_BASE_PATH, "r") as f:
-            return json.load(f)
+            base = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"entries": [], "announcements": []}
+        base = {"entries": [], "announcements": []}
+
+    # Merge in live DB updates
+    try:
+        with usage_store._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM knowledge_updates WHERE active=1 ORDER BY id"
+            ).fetchall()
+        for row in rows:
+            if row["entry_type"] == "qa" and row["question"] and row["answer"]:
+                base["entries"].append({"question": row["question"], "answer": row["answer"]})
+            elif row["entry_type"] == "announcement" and row["announcement"]:
+                base["announcements"].append(row["announcement"])
+    except Exception:
+        pass
+    return base
 
 def format_knowledge_for_prompt():
     """Format knowledge base entries for the system prompt."""
@@ -610,6 +652,38 @@ def format_knowledge_for_prompt():
 
 
 # ── System Prompt ────────────────────────────────────────────────────────
+def format_marketplace_for_prompt() -> str:
+    """Pull active marketplace listings into a prompt section."""
+    try:
+        with usage_store._connect() as conn:
+            rows = conn.execute(
+                """SELECT category, title, description, price, location, contact, status
+                   FROM marketplace_listings ORDER BY category, status, id DESC"""
+            ).fetchall()
+        if not rows:
+            return ""
+        sections = {}
+        for r in rows:
+            cat = r["category"].title()
+            sections.setdefault(cat, [])
+            status_tag = "" if r["status"] == "available" else f" [{r['status'].upper()}]"
+            parts = [f"{r['title']}{status_tag}: {r['description']}"]
+            if r["price"]:
+                parts.append(f"Price: {r['price']}")
+            if r["location"]:
+                parts.append(f"Location: {r['location']}")
+            if r["contact"]:
+                parts.append(f"Contact: {r['contact']}")
+            sections[cat].append(" | ".join(parts))
+        lines = []
+        for cat, entries in sections.items():
+            lines.append(f"{cat.upper()} LISTINGS:")
+            lines.extend(f"  - {e}" for e in entries)
+        return "LIVE MARKETPLACE LISTINGS (current buy/sell/trade listings in the community):\n" + "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def build_system_prompt():
     """Build the full system prompt including knowledge base."""
     base_prompt = """You are Emmet, a friendly and practical AI phone assistant for Banyan Communications.
@@ -636,8 +710,10 @@ Identity:
 - If asked your name, say: I'm Emmet, your AI assistant from Banyan Communications."""
 
     kb_text = format_knowledge_for_prompt()
-    if kb_text:
-        return f"{base_prompt}\n\n{kb_text}"
+    market_text = format_marketplace_for_prompt()
+    extra = "\n\n".join(filter(None, [kb_text, market_text]))
+    if extra:
+        return f"{base_prompt}\n\n{extra}"
     return base_prompt
 
 
@@ -1062,6 +1138,162 @@ def logs():
         json.dumps([dict(r) for r in rows], indent=2),
         mimetype="application/json",
     )
+
+
+ADMIN_TOKEN = env_text("ADMIN_TOKEN", "")
+
+
+def require_admin(req) -> Optional[str]:
+    """Return error message if request is not authorized, else None."""
+    if not ADMIN_TOKEN:
+        return "ADMIN_TOKEN not configured on server"
+    token = req.headers.get("X-Admin-Token", "")
+    if not token or token != ADMIN_TOKEN:
+        return "Unauthorized"
+    return None
+
+
+# ── Admin: Knowledge Base ────────────────────────────────────────────────
+@app.route("/admin/knowledge", methods=["GET"])
+def admin_knowledge_get():
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    kb = load_knowledge_base()
+    return Response(json.dumps(kb, indent=2), mimetype="application/json")
+
+
+@app.route("/admin/knowledge", methods=["POST"])
+def admin_knowledge_post():
+    """Add a Q&A entry or announcement to the live knowledge base."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    data = request.get_json(force=True) or {}
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    entry_type = data.get("type", "qa")  # "qa" or "announcement"
+    with usage_store._connect() as conn:
+        if entry_type == "announcement":
+            text = data.get("announcement", "").strip()
+            if not text:
+                return {"error": "announcement field required"}, 400
+            conn.execute(
+                "INSERT INTO knowledge_updates (entry_type, announcement, active, created_at, updated_at) VALUES (?,?,1,?,?)",
+                ("announcement", text, now, now),
+            )
+        else:
+            q = data.get("question", "").strip()
+            a = data.get("answer", "").strip()
+            if not q or not a:
+                return {"error": "question and answer fields required"}, 400
+            conn.execute(
+                "INSERT INTO knowledge_updates (entry_type, question, answer, active, created_at, updated_at) VALUES (?,?,?,1,?,?)",
+                ("qa", q, a, now, now),
+            )
+        conn.commit()
+    return {"status": "ok", "message": "Knowledge base updated — takes effect on next call"}
+
+
+@app.route("/admin/knowledge/<int:entry_id>", methods=["DELETE"])
+def admin_knowledge_delete(entry_id):
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    with usage_store._connect() as conn:
+        conn.execute("UPDATE knowledge_updates SET active=0 WHERE id=?", (entry_id,))
+        conn.commit()
+    return {"status": "ok", "message": f"Entry {entry_id} deactivated"}
+
+
+# ── Admin: Marketplace ───────────────────────────────────────────────────
+@app.route("/admin/marketplace", methods=["GET"])
+def admin_market_get():
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    cat = request.args.get("category")
+    status = request.args.get("status", "available")
+    query = "SELECT * FROM marketplace_listings"
+    params = []
+    filters = []
+    if cat:
+        filters.append("category=?")
+        params.append(cat.lower())
+    if status != "all":
+        filters.append("status=?")
+        params.append(status)
+    if filters:
+        query += " WHERE " + " AND ".join(filters)
+    query += " ORDER BY category, id DESC"
+    with usage_store._connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return Response(json.dumps([dict(r) for r in rows], indent=2), mimetype="application/json")
+
+
+@app.route("/admin/marketplace", methods=["POST"])
+def admin_market_post():
+    """Add a new marketplace listing."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    data = request.get_json(force=True) or {}
+    required = ["category", "title", "description"]
+    missing = [f for f in required if not data.get(f, "").strip()]
+    if missing:
+        return {"error": f"Missing required fields: {missing}"}, 400
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    with usage_store._connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO marketplace_listings
+               (category, title, description, price, location, contact, status, listed_by, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                data["category"].lower().strip(),
+                data["title"].strip(),
+                data["description"].strip(),
+                data.get("price", ""),
+                data.get("location", ""),
+                data.get("contact", ""),
+                data.get("status", "available"),
+                data.get("listed_by", ""),
+                now, now,
+            ),
+        )
+        new_id = cur.lastrowid
+        conn.commit()
+    return {"status": "ok", "id": new_id, "message": "Listing added — callers can ask about it immediately"}
+
+
+@app.route("/admin/marketplace/<int:listing_id>", methods=["PATCH"])
+def admin_market_patch(listing_id):
+    """Update a listing — e.g. mark as sold."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    data = request.get_json(force=True) or {}
+    allowed = ["title", "description", "price", "location", "contact", "status", "listed_by"]
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return {"error": "No valid fields to update"}, 400
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    updates["updated_at"] = now
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    values = list(updates.values()) + [listing_id]
+    with usage_store._connect() as conn:
+        conn.execute(f"UPDATE marketplace_listings SET {set_clause} WHERE id=?", values)
+        conn.commit()
+    return {"status": "ok", "message": f"Listing {listing_id} updated"}
+
+
+@app.route("/admin/marketplace/<int:listing_id>", methods=["DELETE"])
+def admin_market_delete(listing_id):
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    with usage_store._connect() as conn:
+        conn.execute("DELETE FROM marketplace_listings WHERE id=?", (listing_id,))
+        conn.commit()
+    return {"status": "ok", "message": f"Listing {listing_id} removed"}
 
 
 # ── Entry Point ──────────────────────────────────────────────────────────
