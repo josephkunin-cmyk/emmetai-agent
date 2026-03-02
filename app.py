@@ -886,7 +886,7 @@ def initialize_farming_knowledge_db():
 
 
 def search_farming_knowledge(query: str, limit: int = 3) -> List[Dict]:
-    """Search farming knowledge database for relevant information."""
+    """Search farming knowledge database for relevant information by keywords."""
     try:
         if not os.path.exists(FARMING_KNOWLEDGE_DB):
             return []
@@ -895,17 +895,30 @@ def search_farming_knowledge(query: str, limit: int = 3) -> List[Dict]:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        query_lower = query.lower()
+        # Extract keywords from query (min 3 chars to avoid noise)
+        keywords = [w.lower() for w in query.split() if len(w) >= 3]
+        if not keywords:
+            return []
 
-        # Search in content and topic
-        cursor.execute("""
+        # Build query searching for any keyword match
+        # Start with topic matches (exact keywords are more important)
+        topic_query = " OR ".join(["topic LIKE ?" for _ in keywords])
+        topic_params = [f"%{kw}%" for kw in keywords]
+
+        cursor.execute(f"""
             SELECT topic, content, category FROM knowledge
-            WHERE content LIKE ? OR topic LIKE ?
+            WHERE {topic_query}
             LIMIT ?
-        """, (f"%{query_lower}%", f"%{query_lower}%", limit))
+        """, topic_params + [limit])
 
         results = []
+        seen_topics = set()
+
         for row in cursor.fetchall():
+            if row["topic"] in seen_topics:
+                continue
+            seen_topics.add(row["topic"])
+
             try:
                 content_obj = json.loads(row["content"])
                 results.append({
@@ -919,6 +932,37 @@ def search_farming_knowledge(query: str, limit: int = 3) -> List[Dict]:
                     "category": row["category"],
                     "content": row["content"]
                 })
+
+            if len(results) >= limit:
+                break
+
+        # If we didn't find enough from topic matches, search content
+        if len(results) < limit:
+            content_query = " OR ".join(["content LIKE ?" for _ in keywords])
+            content_params = [f"%{kw}%" for kw in keywords]
+
+            cursor.execute(f"""
+                SELECT topic, content, category FROM knowledge
+                WHERE {content_query}
+                LIMIT ?
+            """, content_params + [limit - len(results)])
+
+            for row in cursor.fetchall():
+                if row["topic"] not in seen_topics:
+                    seen_topics.add(row["topic"])
+                    try:
+                        content_obj = json.loads(row["content"])
+                        results.append({
+                            "topic": row["topic"],
+                            "category": row["category"],
+                            "content": content_obj
+                        })
+                    except json.JSONDecodeError:
+                        results.append({
+                            "topic": row["topic"],
+                            "category": row["category"],
+                            "content": row["content"]
+                        })
 
         conn.close()
         return results
