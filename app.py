@@ -48,14 +48,15 @@ def env_text(name: str, default: str) -> str:
 
 
 BUSINESS_TIMEZONE = env_text("BUSINESS_TIMEZONE", "America/New_York")
-FREE_DAILY_QUERIES = env_int("FREE_DAILY_QUERIES", 5)
+FREE_DAILY_QUERIES = env_int("FREE_DAILY_QUERIES", 4)
+PAID_DAILY_QUERIES = env_int("PAID_DAILY_QUERIES", 4)
 DB_PATH = env_text("DB_PATH", "./hotline_usage.db")
 UPGRADE_MESSAGE = env_text(
     "UPGRADE_MESSAGE",
     (
-        "You've reached your daily limit of five full questions on this line. "
-        "To continue today, paid access is required. "
-        "Please contact Banyan Communications to upgrade."
+        "You've used all your free questions for today. "
+        "To ask four more questions, paid access is required. "
+        "Text me back to unlock them, or call back tomorrow."
     ),
 )
 SERVICE_SCOPE_MESSAGE = env_text(
@@ -68,9 +69,9 @@ SERVICE_SCOPE_MESSAGE = env_text(
 SERVICE_GREETING = env_text(
     "SERVICE_GREETING",
     (
-        "Hello, and welcome to Banyan Communications. I'm Emmet, your AI assistant. "
-        "This line includes five full questions per day per phone number. "
-        "After that, paid access is required."
+        "Welcome to Emmet AI. I'm here to answer your homestead and farming questions. "
+        "You get four free questions today. After that, a small payment unlocks four more. "
+        "What's your question?"
     ),
 )
 VOICE_NAME = env_text("VOICE_NAME", "Polly.Joanna")
@@ -863,10 +864,26 @@ def voice():
 
     used_today = usage_store.get_count(caller_id, usage_date)
     has_paid = usage_store.has_paid_access(caller_id, usage_date)
+    total_limit = FREE_DAILY_QUERIES + (PAID_DAILY_QUERIES if has_paid else 0)
+
+    # Hard cutoff: all questions exhausted
+    if used_today >= total_limit:
+        logger.info(
+            f"[{call_sid[:8]}] Caller {caller_id} all questions exhausted "
+            f"({used_today}/{total_limit})"
+        )
+        return Response(
+            twiml_say(
+                "You've used all your questions for today. Please call back tomorrow."
+            ),
+            mimetype="text/xml"
+        )
+
+    # Free limit hit, offer payment
     if used_today >= FREE_DAILY_QUERIES and not has_paid:
         limit_message = build_limit_message(caller_id, usage_date)
         logger.info(
-            f"[{call_sid[:8]}] Caller {caller_id} over limit "
+            f"[{call_sid[:8]}] Caller {caller_id} free limit hit "
             f"({used_today}/{FREE_DAILY_QUERIES})"
         )
         return Response(
@@ -875,11 +892,13 @@ def voice():
         )
 
     if has_paid:
-        quota_line = "You're on paid access today."
+        remaining = max(0, total_limit - used_today)
+        question_word = "question" if remaining == 1 else "questions"
+        quota_line = f"You have {remaining} {question_word} left on your paid access."
     else:
         remaining = max(0, FREE_DAILY_QUERIES - used_today)
         question_word = "question" if remaining == 1 else "questions"
-        quota_line = f"You have {remaining} free full {question_word} left today."
+        quota_line = f"You have {remaining} free {question_word} left today."
 
     existing_name = usage_store.get_caller_name(caller_id)
     if existing_name:
@@ -892,7 +911,7 @@ def voice():
 
     logger.info(
         f"[{call_sid[:8]}] New call from {caller_id} "
-        f"(used_today={used_today}/{FREE_DAILY_QUERIES}, paid={has_paid})"
+        f"(used={used_today}/{total_limit}, free={FREE_DAILY_QUERIES}, paid={has_paid})"
     )
 
     return Response(
@@ -940,9 +959,16 @@ def intro_name():
         quota_line = "You're on paid access today."
     else:
         used_today = usage_store.get_count(caller_id, usage_date)
-        remaining = max(0, FREE_DAILY_QUERIES - used_today)
-        question_word = "question" if remaining == 1 else "questions"
-        quota_line = f"You have {remaining} free full {question_word} left today."
+        has_paid = usage_store.has_paid_access(caller_id, usage_date)
+        if has_paid:
+            total_allowed = FREE_DAILY_QUERIES + PAID_DAILY_QUERIES
+            remaining = max(0, total_allowed - used_today)
+            question_word = "question" if remaining == 1 else "questions"
+            quota_line = f"You have {remaining} {question_word} left today."
+        else:
+            remaining = max(0, FREE_DAILY_QUERIES - used_today)
+            question_word = "question" if remaining == 1 else "questions"
+            quota_line = f"You have {remaining} free {question_word} left today."
 
     return Response(
         twiml_listen(
@@ -993,10 +1019,26 @@ def gather():
 
     has_paid = usage_store.has_paid_access(caller_id, usage_date)
     used_before = usage_store.get_count(caller_id, usage_date)
+    total_limit = FREE_DAILY_QUERIES + (PAID_DAILY_QUERIES if has_paid else 0)
+
+    # Hard cutoff: used all free + paid questions
+    if used_before >= total_limit:
+        logger.info(
+            f"[{call_sid[:8]}] All questions exhausted for {caller_id}: "
+            f"{used_before}/{total_limit}"
+        )
+        return Response(
+            twiml_say(
+                "You've used all your questions for today. Please call back tomorrow."
+            ),
+            mimetype="text/xml"
+        )
+
+    # Free limit hit, offer payment
     if used_before >= FREE_DAILY_QUERIES and not has_paid:
         limit_message = build_limit_message(caller_id, usage_date)
         logger.info(
-            f"[{call_sid[:8]}] Daily limit hit for {caller_id}: "
+            f"[{call_sid[:8]}] Free limit hit for {caller_id}: "
             f"{used_before}/{FREE_DAILY_QUERIES}"
         )
         return Response(
@@ -1026,11 +1068,25 @@ def gather():
                 "Could you try asking me again?"
             )
 
-    remaining = max(0, FREE_DAILY_QUERIES - used_after)
-    if not has_paid and remaining == 0:
+    total_limit = FREE_DAILY_QUERIES + (PAID_DAILY_QUERIES if has_paid else 0)
+    remaining = max(0, total_limit - used_after)
+
+    if remaining == 0:
+        # All questions exhausted
+        final_message = (
+            f"{ai_response} That was your last question for today. "
+            "Please call back tomorrow."
+        )
+        return Response(
+            twiml_say(final_message),
+            mimetype="text/xml"
+        )
+
+    if not has_paid and remaining <= PAID_DAILY_QUERIES:
+        # Just hit the free limit, offer payment
         limit_message = build_limit_message(caller_id, usage_date)
         final_message = (
-            f"{ai_response} That was your fifth free question today. {limit_message}"
+            f"{ai_response} That was your fourth free question today. {limit_message}"
         )
         return Response(
             twiml_say(final_message),
