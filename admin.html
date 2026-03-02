@@ -757,7 +757,7 @@
             <button class="tab-button" data-tab="payments">Payments</button>
             <button class="tab-button" data-tab="calls">Call Logs</button>
             <button class="tab-button" data-tab="knowledge">Knowledge Base</button>
-            <button class="tab-button" data-tab="config">Service Config</button>
+            <button class="tab-button" data-tab="config">🔗 Services</button>
         </div>
 
         <!-- Tab 1: Overview -->
@@ -991,39 +991,70 @@
             </div>
         </div>
 
-        <!-- Tab 7: Service Config -->
+        <!-- Tab 7: Service Hub (SSO Dashboard) -->
         <div class="tab-content" id="config">
-            <div class="card">
-                <h2 style="margin-bottom: 1.5rem;">External Service Links</h2>
-                <div class="config-links">
-                    <div class="config-link-card">
-                        <h3>Render Dashboard</h3>
-                        <a href="https://dashboard.render.com" target="_blank">dashboard.render.com</a>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+                <!-- Twilio Card -->
+                <div class="card" id="twilioServiceCard">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                        <h2 style="font-size:1.1rem;">📞 Twilio</h2>
+                        <span id="twilioStatus" style="padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.75rem;background:#334155;">checking...</span>
                     </div>
-                    <div class="config-link-card">
-                        <h3>Square Dashboard</h3>
-                        <a href="https://squareup.com/dashboard" target="_blank">squareup.com/dashboard</a>
+                    <div id="twilioContent" style="font-size:0.85rem;color:var(--text-secondary);">Loading...</div>
+                    <a href="https://console.twilio.com" target="_blank" style="display:inline-block;margin-top:1rem;color:var(--accent-color);text-decoration:none;font-size:0.85rem;">Open Twilio Console →</a>
+                </div>
+                <!-- Square Card -->
+                <div class="card" id="squareServiceCard">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                        <h2 style="font-size:1.1rem;">💳 Square</h2>
+                        <span id="squareStatus" style="padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.75rem;background:#334155;">checking...</span>
                     </div>
-                    <div class="config-link-card">
-                        <h3>Twilio Console</h3>
-                        <a href="https://console.twilio.com" target="_blank">console.twilio.com</a>
+                    <div id="squareContent" style="font-size:0.85rem;color:var(--text-secondary);">Loading...</div>
+                    <a href="https://squareup.com/dashboard" target="_blank" style="display:inline-block;margin-top:1rem;color:var(--accent-color);text-decoration:none;font-size:0.85rem;">Open Square Dashboard →</a>
+                </div>
+                <!-- GitHub Card -->
+                <div class="card" id="githubServiceCard">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                        <h2 style="font-size:1.1rem;">🐙 GitHub</h2>
+                        <span id="githubStatus" style="padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.75rem;background:#334155;">checking...</span>
                     </div>
-                    <div class="config-link-card">
-                        <h3>GitHub Repository</h3>
-                        <a href="https://github.com/josephkunin-cmyk/emmetai-agent" target="_blank">github.com/josephkunin-cmyk/emmetai-agent</a>
+                    <div id="githubContent" style="font-size:0.85rem;color:var(--text-secondary);">Loading...</div>
+                    <a href="https://github.com/josephkunin-cmyk/emmetai-agent" target="_blank" style="display:inline-block;margin-top:1rem;color:var(--accent-color);text-decoration:none;font-size:0.85rem;">Open GitHub Repo →</a>
+                </div>
+                <!-- Render Card -->
+                <div class="card" id="renderServiceCard">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                        <h2 style="font-size:1.1rem;">🚀 Render</h2>
+                        <span id="renderStatus" style="padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.75rem;background:#334155;">checking...</span>
                     </div>
-                    <div class="config-link-card">
-                        <h3>Emmet AI Website</h3>
-                        <a href="https://emmetai.com" target="_blank">emmetai.com</a>
-                    </div>
+                    <div id="renderContent" style="font-size:0.85rem;color:var(--text-secondary);">Loading...</div>
+                    <a href="https://dashboard.render.com" target="_blank" style="display:inline-block;margin-top:1rem;color:var(--accent-color);text-decoration:none;font-size:0.85rem;">Open Render Dashboard →</a>
                 </div>
             </div>
-            <div class="card">
-                <h2 style="margin-bottom: 1.5rem;">Environment Configuration</h2>
-                <div id="configContent">
-                    <p>Base URL: <code style="background: var(--tertiary-bg); padding: 0.25rem 0.5rem; border-radius: 0.25rem;">https://emmetai-agent.onrender.com</code></p>
-                    <p style="margin-top: 1rem; color: var(--text-secondary);">Note: Sensitive environment variables are not displayed for security reasons.</p>
-                </div>
+            <!-- Twilio Call History -->
+            <div class="card" id="twilioCallHistory" style="display:none;">
+                <h2 style="margin-bottom:1rem;font-size:1.1rem;">📞 Recent Twilio Calls</h2>
+                <div class="table-container"><table id="twilioCallsTable"><thead><tr>
+                    <th>From</th><th>To</th><th>Status</th><th>Duration</th><th>Direction</th><th>Date</th>
+                </tr></thead><tbody></tbody></table></div>
+            </div>
+            <!-- Square Transactions -->
+            <div class="card" id="squareTransactions" style="display:none;">
+                <h2 style="margin-bottom:1rem;font-size:1.1rem;">💳 Recent Square Payments</h2>
+                <div class="table-container"><table id="squarePayTable"><thead><tr>
+                    <th>ID</th><th>Amount</th><th>Status</th><th>Source</th><th>Date</th>
+                </tr></thead><tbody></tbody></table></div>
+            </div>
+            <!-- GitHub Commits -->
+            <div class="card" id="githubCommits" style="display:none;">
+                <h2 style="margin-bottom:1rem;font-size:1.1rem;">🐙 Recent Commits</h2>
+                <div class="table-container"><table id="githubCommitsTable"><thead><tr>
+                    <th>SHA</th><th>Message</th><th>Author</th><th>Date</th>
+                </tr></thead><tbody></tbody></table></div>
+            </div>
+            <!-- Website Link -->
+            <div class="card" style="text-align:center;padding:1rem;">
+                <a href="https://emmetai.com" target="_blank" style="color:var(--accent-color);text-decoration:none;font-size:1rem;">🌐 Open Emmet AI Website (emmetai.com) →</a>
             </div>
         </div>
     </div>
@@ -1172,6 +1203,9 @@
                     break;
                 case 'knowledge':
                     await loadKnowledgeBase();
+                    break;
+                case 'config':
+                    await loadServiceHub();
                     break;
             }
         }
@@ -1721,6 +1755,143 @@
                 e.target.classList.remove('show');
             }
         });
+
+        // ── Service Hub (SSO Dashboard) ──────────────────────────────
+        function setServiceStatus(id, connected, label) {
+            const el = document.getElementById(id);
+            if (connected) {
+                el.textContent = label || 'Connected';
+                el.style.background = 'var(--success-color)';
+                el.style.color = '#fff';
+            } else {
+                el.textContent = label || 'Disconnected';
+                el.style.background = 'var(--error-color)';
+                el.style.color = '#fff';
+            }
+        }
+
+        async function loadServiceHub() {
+            // Load all services in parallel
+            await Promise.all([
+                loadTwilioService(),
+                loadSquareService(),
+                loadGithubService(),
+                loadRenderService(),
+            ]);
+        }
+
+        async function loadTwilioService() {
+            const content = document.getElementById('twilioContent');
+            try {
+                const data = await apiCall('/admin/services/twilio');
+                if (!data) { setServiceStatus('twilioStatus', false); content.innerHTML = 'Not authenticated'; return; }
+                setServiceStatus('twilioStatus', data.connected, data.connected ? data.status || 'Active' : 'Not Connected');
+                if (data.connected) {
+                    const nums = (data.phone_numbers || []).map(n => n.phone).join(', ') || 'None';
+                    content.innerHTML = `
+                        <p><strong>Account:</strong> ${data.account_name || 'N/A'}</p>
+                        <p><strong>Balance:</strong> ${data.currency || '$'}${parseFloat(data.balance || 0).toFixed(2)}</p>
+                        <p><strong>Phone Numbers:</strong> ${nums}</p>
+                        <p><strong>SID:</strong> ${data.account_sid || 'N/A'}</p>
+                    `;
+                    // Show call history table
+                    if (data.recent_calls && data.recent_calls.length > 0) {
+                        const tbody = document.querySelector('#twilioCallsTable tbody');
+                        tbody.innerHTML = data.recent_calls.map(c => `<tr>
+                            <td>${c.from || ''}</td><td>${c.to || ''}</td>
+                            <td><span class="status-badge" style="background:${c.status==='completed'?'var(--success-color)':'var(--warning-color)'}">${c.status}</span></td>
+                            <td>${c.duration || 0}s</td><td>${c.direction || ''}</td>
+                            <td>${c.date ? new Date(c.date).toLocaleString() : ''}</td>
+                        </tr>`).join('');
+                        document.getElementById('twilioCallHistory').style.display = 'block';
+                    }
+                } else {
+                    content.innerHTML = `<p style="color:var(--error-color)">${data.error || 'Not configured'}</p>`;
+                }
+            } catch (e) { setServiceStatus('twilioStatus', false); content.innerHTML = 'Error loading'; }
+        }
+
+        async function loadSquareService() {
+            const content = document.getElementById('squareContent');
+            try {
+                const data = await apiCall('/admin/services/square');
+                if (!data) { setServiceStatus('squareStatus', false); content.innerHTML = 'Not authenticated'; return; }
+                setServiceStatus('squareStatus', data.connected, data.connected ? data.environment : 'Not Connected');
+                if (data.connected) {
+                    const m = data.merchant || {};
+                    const locs = (data.locations || []).map(l => l.name).join(', ') || 'None';
+                    content.innerHTML = `
+                        <p><strong>Business:</strong> ${m.business_name || 'N/A'}</p>
+                        <p><strong>Environment:</strong> ${data.environment || 'N/A'}</p>
+                        <p><strong>Locations:</strong> ${locs}</p>
+                        <p><strong>Country:</strong> ${m.country || 'N/A'}</p>
+                    `;
+                    // Show payment history
+                    if (data.recent_payments && data.recent_payments.length > 0) {
+                        const tbody = document.querySelector('#squarePayTable tbody');
+                        tbody.innerHTML = data.recent_payments.map(p => `<tr>
+                            <td>${(p.id || '').slice(0,8)}...</td>
+                            <td>$${(p.amount_cents/100).toFixed(2)}</td>
+                            <td><span class="status-badge" style="background:${p.status==='COMPLETED'?'var(--success-color)':'var(--warning-color)'}">${p.status}</span></td>
+                            <td>${p.source_type || ''}</td>
+                            <td>${p.created_at ? new Date(p.created_at).toLocaleString() : ''}</td>
+                        </tr>`).join('');
+                        document.getElementById('squareTransactions').style.display = 'block';
+                    }
+                } else {
+                    content.innerHTML = `<p style="color:var(--error-color)">${data.error || 'Not configured'}</p>`;
+                }
+            } catch (e) { setServiceStatus('squareStatus', false); content.innerHTML = 'Error loading'; }
+        }
+
+        async function loadGithubService() {
+            const content = document.getElementById('githubContent');
+            try {
+                const data = await apiCall('/admin/services/github');
+                if (!data) { setServiceStatus('githubStatus', false); content.innerHTML = 'Not authenticated'; return; }
+                setServiceStatus('githubStatus', data.connected, data.connected ? 'Connected' : 'Error');
+                if (data.connected) {
+                    const r = data.repo || {};
+                    content.innerHTML = `
+                        <p><strong>Repo:</strong> ${r.name || 'N/A'}</p>
+                        <p><strong>Branch:</strong> ${r.default_branch || 'main'}</p>
+                        <p><strong>Last Push:</strong> ${r.pushed_at ? new Date(r.pushed_at).toLocaleString() : 'N/A'}</p>
+                        <p><strong>Open Issues:</strong> ${r.open_issues || 0}</p>
+                    `;
+                    // Show commits
+                    if (data.recent_commits && data.recent_commits.length > 0) {
+                        const tbody = document.querySelector('#githubCommitsTable tbody');
+                        tbody.innerHTML = data.recent_commits.map(c => `<tr>
+                            <td><code style="background:var(--tertiary-bg);padding:0.15rem 0.4rem;border-radius:0.2rem;">${c.sha}</code></td>
+                            <td>${c.message}</td>
+                            <td>${c.author || ''}</td>
+                            <td>${c.date ? new Date(c.date).toLocaleString() : ''}</td>
+                        </tr>`).join('');
+                        document.getElementById('githubCommits').style.display = 'block';
+                    }
+                } else {
+                    content.innerHTML = `<p style="color:var(--error-color)">${data.error || 'Error'}</p>`;
+                }
+            } catch (e) { setServiceStatus('githubStatus', false); content.innerHTML = 'Error loading'; }
+        }
+
+        async function loadRenderService() {
+            const content = document.getElementById('renderContent');
+            try {
+                const data = await apiCall('/admin/services/render');
+                if (!data) { setServiceStatus('renderStatus', false); content.innerHTML = 'Not authenticated'; return; }
+                setServiceStatus('renderStatus', data.connected, 'Live');
+                const env = data.environment || {};
+                content.innerHTML = `
+                    <p><strong>Service:</strong> ${data.service_name || 'emmetai-agent'}</p>
+                    <p><strong>URL:</strong> ${data.service_url || 'N/A'}</p>
+                    <p><strong>AI Model:</strong> ${env.ANTHROPIC_MODEL || 'N/A'}</p>
+                    <p><strong>Voice:</strong> ${env.VOICE_NAME || 'N/A'}</p>
+                    <p><strong>Free Queries:</strong> ${env.FREE_DAILY_QUERIES || 'N/A'}</p>
+                    <p><strong>Twilio:</strong> ${env.TWILIO_CONFIGURED ? '✅' : '❌'} | <strong>Square:</strong> ${env.SQUARE_CONFIGURED ? '✅' : '❌'}</p>
+                `;
+            } catch (e) { setServiceStatus('renderStatus', false); content.innerHTML = 'Error loading'; }
+        }
     </script>
 </body>
 </html>

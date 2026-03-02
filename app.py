@@ -1949,6 +1949,221 @@ def admin_call_logs():
         return {"error": str(e)}, 500
 
 
+# ── Unified Service Hub (SSO Dashboard APIs) ─────────────────────────────
+
+@app.route("/admin/services/twilio", methods=["GET"])
+def admin_twilio_status():
+    """Pull live Twilio account data: balance, calls, messages, phone numbers."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        return {"error": "Twilio not configured", "connected": False}, 200
+    try:
+        from twilio.rest import Client as TC
+        tc = TC(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        # Account info
+        acct = tc.api.accounts(TWILIO_ACCOUNT_SID).fetch()
+        # Balance
+        bal_list = tc.api.accounts(TWILIO_ACCOUNT_SID).balance.fetch()
+        balance = bal_list.balance if bal_list else "N/A"
+        currency = bal_list.currency if bal_list else "USD"
+        # Phone numbers
+        numbers = [{"phone": n.phone_number, "friendly": n.friendly_name, "capabilities": n.capabilities}
+                   for n in tc.incoming_phone_numbers.list(limit=10)]
+        # Recent calls (last 20)
+        recent_calls = []
+        for c in tc.calls.list(limit=20):
+            recent_calls.append({
+                "sid": c.sid, "from": c.from_formatted, "to": c.to_formatted,
+                "status": c.status, "direction": c.direction,
+                "duration": c.duration, "date": str(c.date_created),
+            })
+        # Recent messages (last 20)
+        recent_msgs = []
+        for m in tc.messages.list(limit=20):
+            recent_msgs.append({
+                "sid": m.sid, "from": m.from_, "to": m.to,
+                "status": m.status, "direction": m.direction,
+                "body": m.body[:100] if m.body else "", "date": str(m.date_sent),
+            })
+        return {
+            "connected": True,
+            "account_name": acct.friendly_name,
+            "account_sid": TWILIO_ACCOUNT_SID[:8] + "...",
+            "status": acct.status,
+            "balance": balance,
+            "currency": currency,
+            "phone_numbers": numbers,
+            "recent_calls": recent_calls,
+            "recent_messages": recent_msgs,
+            "console_url": "https://console.twilio.com",
+        }
+    except Exception as e:
+        logger.error(f"Twilio status error: {e}")
+        return {"connected": False, "error": str(e)}, 200
+
+
+@app.route("/admin/services/square", methods=["GET"])
+def admin_square_status():
+    """Pull live Square account data: locations, transactions, balance."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    if not SQUARE_ACCESS_TOKEN:
+        return {"error": "Square not configured", "connected": False}, 200
+    try:
+        base = "https://connect.squareup.com" if SQUARE_ENVIRONMENT == "production" else "https://connect.squareupsandbox.com"
+        headers = {
+            "Authorization": f"Bearer {SQUARE_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+            "Square-Version": SQUARE_API_VERSION,
+        }
+        # Locations
+        loc_resp = requests.get(f"{base}/v2/locations", headers=headers, timeout=10)
+        locations = []
+        if loc_resp.ok:
+            for loc in loc_resp.json().get("locations", []):
+                locations.append({
+                    "id": loc.get("id"), "name": loc.get("name"),
+                    "status": loc.get("status"), "currency": loc.get("currency"),
+                    "address": loc.get("address", {}).get("address_line_1", ""),
+                })
+        # Recent payments
+        pay_resp = requests.get(f"{base}/v2/payments?limit=20&sort_order=DESC", headers=headers, timeout=10)
+        payments = []
+        if pay_resp.ok:
+            for p in pay_resp.json().get("payments", []):
+                amt = p.get("amount_money", {})
+                payments.append({
+                    "id": p.get("id"), "status": p.get("status"),
+                    "amount_cents": amt.get("amount", 0),
+                    "currency": amt.get("currency", "USD"),
+                    "source_type": p.get("source_type", ""),
+                    "created_at": p.get("created_at", ""),
+                })
+        # Merchant info
+        merchant_resp = requests.get(f"{base}/v2/merchants/me", headers=headers, timeout=10)
+        merchant = {}
+        if merchant_resp.ok:
+            m = merchant_resp.json().get("merchant", {})
+            merchant = {"business_name": m.get("business_name"), "country": m.get("country"), "currency": m.get("currency")}
+        return {
+            "connected": True,
+            "environment": SQUARE_ENVIRONMENT,
+            "merchant": merchant,
+            "locations": locations,
+            "recent_payments": payments,
+            "dashboard_url": "https://squareup.com/dashboard" if SQUARE_ENVIRONMENT == "production" else "https://squareupsandbox.com/dashboard",
+        }
+    except Exception as e:
+        logger.error(f"Square status error: {e}")
+        return {"connected": False, "error": str(e)}, 200
+
+
+@app.route("/admin/services/github", methods=["GET"])
+def admin_github_status():
+    """Pull live GitHub repo data: recent commits, issues, deploy status."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    repo = "josephkunin-cmyk/emmetai-agent"
+    gh_headers = {"Accept": "application/vnd.github.v3+json"}
+    try:
+        # Repo info
+        repo_resp = requests.get(f"https://api.github.com/repos/{repo}", headers=gh_headers, timeout=10)
+        repo_info = {}
+        if repo_resp.ok:
+            r = repo_resp.json()
+            repo_info = {
+                "name": r.get("full_name"), "private": r.get("private"),
+                "default_branch": r.get("default_branch"),
+                "updated_at": r.get("updated_at"), "pushed_at": r.get("pushed_at"),
+                "size_kb": r.get("size"), "open_issues": r.get("open_issues_count"),
+            }
+        # Recent commits
+        commits_resp = requests.get(f"https://api.github.com/repos/{repo}/commits?per_page=10", headers=gh_headers, timeout=10)
+        commits = []
+        if commits_resp.ok:
+            for c in commits_resp.json():
+                commits.append({
+                    "sha": c.get("sha", "")[:7],
+                    "message": c.get("commit", {}).get("message", "").split("\n")[0][:80],
+                    "author": c.get("commit", {}).get("author", {}).get("name", ""),
+                    "date": c.get("commit", {}).get("author", {}).get("date", ""),
+                })
+        return {
+            "connected": True,
+            "repo": repo_info,
+            "recent_commits": commits,
+            "repo_url": f"https://github.com/{repo}",
+        }
+    except Exception as e:
+        logger.error(f"GitHub status error: {e}")
+        return {"connected": False, "error": str(e)}, 200
+
+
+@app.route("/admin/services/render", methods=["GET"])
+def admin_render_status():
+    """Show Render deployment info based on what we know."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    return {
+        "connected": True,
+        "service_name": "emmetai-agent",
+        "service_url": PUBLIC_BASE_URL,
+        "dashboard_url": "https://dashboard.render.com",
+        "environment": {
+            "ANTHROPIC_MODEL": ANTHROPIC_MODEL,
+            "VOICE_NAME": VOICE_NAME,
+            "FREE_DAILY_QUERIES": FREE_DAILY_QUERIES,
+            "PAID_DAILY_QUERIES": PAID_DAILY_QUERIES,
+            "SQUARE_ENVIRONMENT": SQUARE_ENVIRONMENT,
+            "TWILIO_CONFIGURED": bool(TWILIO_ACCOUNT_SID),
+            "SQUARE_CONFIGURED": bool(SQUARE_ACCESS_TOKEN),
+            "ADMIN_TOKEN_SET": bool(ADMIN_TOKEN),
+        },
+    }
+
+
+@app.route("/admin/services/all", methods=["GET"])
+def admin_all_services():
+    """Single endpoint to fetch status from all services at once."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    results = {}
+    # Twilio
+    try:
+        results["twilio"] = admin_twilio_status().get_json() if hasattr(admin_twilio_status(), 'get_json') else json.loads(admin_twilio_status().data) if hasattr(admin_twilio_status(), 'data') else {"connected": False}
+    except Exception:
+        pass
+    # Build from individual calls
+    with app.test_request_context(headers={"X-Admin-Token": request.headers.get("X-Admin-Token", "")}):
+        try:
+            tw = admin_twilio_status()
+            results["twilio"] = tw.get_json() if hasattr(tw, 'get_json') else json.loads(tw[0]) if isinstance(tw, tuple) else {"connected": False}
+        except Exception as e:
+            results["twilio"] = {"connected": False, "error": str(e)}
+        try:
+            sq = admin_square_status()
+            results["square"] = sq.get_json() if hasattr(sq, 'get_json') else json.loads(sq[0]) if isinstance(sq, tuple) else {"connected": False}
+        except Exception as e:
+            results["square"] = {"connected": False, "error": str(e)}
+        try:
+            gh = admin_github_status()
+            results["github"] = gh.get_json() if hasattr(gh, 'get_json') else json.loads(gh[0]) if isinstance(gh, tuple) else {"connected": False}
+        except Exception as e:
+            results["github"] = {"connected": False, "error": str(e)}
+        try:
+            rn = admin_render_status()
+            results["render"] = rn.get_json() if hasattr(rn, 'get_json') else json.loads(rn[0]) if isinstance(rn, tuple) else {"connected": False}
+        except Exception as e:
+            results["render"] = {"connected": False, "error": str(e)}
+    return results
+
+
 # ── Voice Payment System (Square Integration) ────────────────────────────
 # Global dict to store in-flight payment sessions (card details temporary)
 payment_sessions = {}
