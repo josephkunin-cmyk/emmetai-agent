@@ -941,35 +941,18 @@ def voice():
             mimetype="text/xml"
         )
 
-    if has_paid:
-        remaining = max(0, total_limit - used_today)
-        question_word = "question" if remaining == 1 else "questions"
-        quota_line = f"You have {remaining} {question_word} left on your paid access."
-    else:
-        remaining = max(0, FREE_DAILY_QUERIES - used_today)
-        question_word = "question" if remaining == 1 else "questions"
-        quota_line = f"You have {remaining} free {question_word} left today."
-
-    existing_name = usage_store.get_caller_name(caller_id)
-    if existing_name:
-        name_prompt = (
-            f"Welcome back {existing_name}. "
-            "What name should I call you today? You can say same name."
-        )
-    else:
-        name_prompt = "Before we begin, what's your first name?"
-
     logger.info(
         f"[{call_sid[:8]}] New call from {caller_id} "
         f"(used={used_today}/{total_limit}, free={FREE_DAILY_QUERIES}, paid={has_paid})"
     )
 
+    # Just the greeting — no quota info, no name asking
     return Response(
         twiml_listen(
-            f"{SERVICE_GREETING} {quota_line} {name_prompt}",
-            action="/intro-name",
-            fallback_text="I didn't catch your name. Please say your first name.",
-            redirect_url="/voice?returning=true&stage=name",
+            SERVICE_GREETING,
+            action="/gather",
+            fallback_text="I didn't catch that. Please ask your question.",
+            redirect_url="/voice?returning=true",
         ),
         mimetype="text/xml"
     )
@@ -1121,48 +1104,24 @@ def gather():
     total_limit = FREE_DAILY_QUERIES + (PAID_DAILY_QUERIES if has_paid else 0)
     remaining = max(0, total_limit - used_after)
 
+    # Hard cutoff: all 8 questions used (4 free + 4 paid)
     if remaining == 0:
-        # All questions exhausted
-        final_message = (
-            f"{ai_response} That was your last question for today. "
-            "Please call back tomorrow."
-        )
+        final_message = f"{ai_response} That's all your questions for today. Thanks for calling."
+        return Response(twiml_say(final_message), mimetype="text/xml")
+
+    # After 4th free question: offer the 4 more
+    if used_after == FREE_DAILY_QUERIES and not has_paid:
+        message = f"{ai_response} You have 4 more free questions. Keep going!"
         return Response(
-            twiml_say(final_message),
+            twiml_listen(message, action="/gather"),
             mimetype="text/xml"
         )
 
-    if not has_paid and remaining <= PAID_DAILY_QUERIES:
-        # Just hit the free limit, offer payment
-        limit_message = build_limit_message(caller_id, usage_date)
-        final_message = (
-            f"{ai_response} That was your fourth free question today. {limit_message}"
-        )
-        return Response(
-            twiml_say(final_message),
-            mimetype="text/xml"
-        )
-
-    # Add natural continuation prompt (vary it)
-    turns = call_metadata.get(call_sid, {}).get("turns", 0)
-    continuations = [
-        "What else can I help with?",
-        "Anything else on your mind?",
-        "Is there something else I can help you with?",
-        "What else would you like to know?",
-        "Got another question?"
-    ]
-    continuation = continuations[turns % len(continuations)]
-    usage_note = ""
-    if not has_paid and remaining <= 2:
-        question_word = "question" if remaining == 1 else "questions"
-        usage_note = f" You have {remaining} free {question_word} left today."
-    if has_paid:
-        usage_note = " Paid access is active for today."
-    full_response = f"{ai_response}{usage_note} {continuation}"
-
+    # Continue normally
+    continuation = "What else?"
+    full_response = f"{ai_response} {continuation}"
     return Response(
-        twiml_listen(full_response),
+        twiml_listen(full_response, action="/gather"),
         mimetype="text/xml"
     )
 
