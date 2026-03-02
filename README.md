@@ -12,6 +12,16 @@ python3 scripts/preflight.py --base-url https://emmetai-agent.onrender.com
 
 You should see all `PASS` lines.
 
+Strict production check example:
+
+```bash
+python3 scripts/preflight.py \
+  --base-url https://emmetai-agent.onrender.com \
+  --expect-free-daily-queries 5 \
+  --expect-model claude-haiku-4-5-20251001 \
+  --require-square
+```
+
 ## Verify and auto-fix Twilio webhook
 
 Export Twilio credentials in your shell:
@@ -50,12 +60,16 @@ Expected Twilio configuration:
 
 Optional:
 - `FREE_DAILY_QUERIES` (default `5`)
+- `PAID_DAILY_QUERIES` (default `4`)
+- `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`)
 - `BUSINESS_TIMEZONE` (default `America/New_York`)
 - `DB_PATH` (default `./hotline_usage.db`)
 - `VOICE_NAME` (default `Polly.Joanna`)
+- `SERVICE_PHONE_DISPLAY` (for `/health` and ops visibility)
 - `UPGRADE_MESSAGE` (spoken when limit is hit)
 - `SERVICE_SCOPE_MESSAGE` (spoken for out-of-scope requests)
 - `SERVICE_GREETING` (first greeting text)
+- `TWILIO_VALIDATE_SIGNATURE` (`true` to enforce signed Twilio webhooks)
 - `TWILIO_MESSAGING_FROM` (needed to SMS payment links)
 - `SQUARE_ACCESS_TOKEN`
 - `SQUARE_LOCATION_ID`
@@ -65,6 +79,7 @@ Optional:
 - `SQUARE_DAILY_UNLOCK_CENTS` (default `500`)
 - `SQUARE_WEBHOOK_SIGNATURE_KEY` (recommended)
 - `PUBLIC_BASE_URL` (used for webhook/payment redirects)
+- `APP_VERSION` (optional deploy/version marker in `/health`)
 - `PORT` (Render sets this automatically)
 
 ## Limits and guardrails behavior

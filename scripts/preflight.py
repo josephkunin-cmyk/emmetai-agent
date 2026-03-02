@@ -49,7 +49,12 @@ def http_post_form(url: str, form: dict[str, str], timeout: int = 30) -> str:
         return resp.read().decode("utf-8")
 
 
-def check_health(base_url: str) -> CheckResult:
+def check_health(
+    base_url: str,
+    expected_free_queries: int | None = None,
+    expected_model: str | None = None,
+    require_square: bool = False,
+) -> CheckResult:
     url = f"{base_url}/health"
     try:
         payload = http_get_json(url)
@@ -66,7 +71,36 @@ def check_health(base_url: str) -> CheckResult:
             False,
             "anthropic_configured=false (set ANTHROPIC_API_KEY in Render environment)",
         )
-    return CheckResult("health", True, f"ok (anthropic_configured={configured})")
+    free_queries = payload.get("free_daily_queries")
+    model = (payload.get("model") or "").strip()
+    square_configured = bool(payload.get("square_configured"))
+
+    if expected_free_queries is not None and free_queries != expected_free_queries:
+        return CheckResult(
+            "health",
+            False,
+            f"free_daily_queries={free_queries!r}, expected={expected_free_queries}",
+        )
+    if expected_model and model != expected_model:
+        return CheckResult(
+            "health",
+            False,
+            f"model={model!r}, expected={expected_model!r}",
+        )
+    if require_square and not square_configured:
+        return CheckResult(
+            "health",
+            False,
+            "square_configured=false (set SQUARE_ACCESS_TOKEN and SQUARE_LOCATION_ID)",
+        )
+
+    details = [
+        f"anthropic_configured={configured}",
+        f"free_daily_queries={free_queries}",
+        f"model={model or 'n/a'}",
+        f"square_configured={square_configured}",
+    ]
+    return CheckResult("health", True, "ok (" + ", ".join(details) + ")")
 
 
 def parse_twiml(text: str) -> ET.Element:
@@ -226,6 +260,22 @@ def main() -> int:
         help="Sample user question for /gather AI test",
     )
     parser.add_argument(
+        "--expect-free-daily-queries",
+        type=int,
+        default=None,
+        help="Fail if /health free_daily_queries does not match this value",
+    )
+    parser.add_argument(
+        "--expect-model",
+        default=None,
+        help="Fail if /health model does not match this exact value",
+    )
+    parser.add_argument(
+        "--require-square",
+        action="store_true",
+        help="Fail if /health reports square_configured=false",
+    )
+    parser.add_argument(
         "--check-twilio",
         action="store_true",
         help="Also verify Twilio incoming number webhook settings",
@@ -244,7 +294,12 @@ def main() -> int:
 
     base_url = args.base_url.strip().rstrip("/")
     results: list[CheckResult] = [
-        check_health(base_url),
+        check_health(
+            base_url,
+            expected_free_queries=args.expect_free_daily_queries,
+            expected_model=args.expect_model,
+            require_square=args.require_square,
+        ),
         check_voice_twiml(base_url),
         check_intro_name(base_url),
         check_ai_response(base_url, args.sample_question),

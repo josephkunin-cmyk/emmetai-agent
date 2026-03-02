@@ -21,6 +21,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from flask import Flask, request, Response
 from twilio.rest import Client as TwilioClient
+from twilio.request_validator import RequestValidator
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -49,8 +50,21 @@ def env_text(name: str, default: str) -> str:
     return (value or default).strip()
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, str(default)).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def env_int_alias(primary: str, fallback: str, default: int) -> int:
+    if os.environ.get(primary, "").strip():
+        return env_int(primary, default)
+    if os.environ.get(fallback, "").strip():
+        return env_int(fallback, default)
+    return default
+
+
 BUSINESS_TIMEZONE = env_text("BUSINESS_TIMEZONE", "America/New_York")
-FREE_DAILY_QUERIES = env_int("FREE_DAILY_QUERIES", 4)
+FREE_DAILY_QUERIES = env_int_alias("FREE_DAILY_QUERIES", "FREE_QUERIES_PER_DAY", 5)
 PAID_DAILY_QUERIES = env_int("PAID_DAILY_QUERIES", 4)
 DB_PATH = env_text("DB_PATH", "./hotline_usage.db")
 UPGRADE_MESSAGE = env_text(
@@ -75,9 +89,13 @@ SERVICE_GREETING = env_text(
     ),
 )
 VOICE_NAME = env_text("VOICE_NAME", "Polly.Joanna")
+ANTHROPIC_MODEL = env_text("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+APP_VERSION = env_text("APP_VERSION", "unknown")
 TWILIO_ACCOUNT_SID = env_text("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = env_text("TWILIO_AUTH_TOKEN", "")
 TWILIO_MESSAGING_FROM = env_text("TWILIO_MESSAGING_FROM", "")
+TWILIO_VALIDATE_SIGNATURE = env_bool("TWILIO_VALIDATE_SIGNATURE", False)
+SERVICE_PHONE_DISPLAY = env_text("SERVICE_PHONE_DISPLAY", "+17179225968")
 SQUARE_ACCESS_TOKEN = env_text("SQUARE_ACCESS_TOKEN", "")
 SQUARE_LOCATION_ID = env_text("SQUARE_LOCATION_ID", "")
 SQUARE_ENVIRONMENT = env_text("SQUARE_ENVIRONMENT", "production").lower()
@@ -390,9 +408,6 @@ app = Flask(__name__)
 anthropic_client = None
 usage_store = UsageStore(DB_PATH)
 
-# Initialize farming knowledge database on startup
-initialize_farming_knowledge_db()
-
 # In-memory conversation store keyed by Twilio CallSid
 conversations = {}
 call_metadata = {}
@@ -467,6 +482,29 @@ def get_twilio_client() -> Optional[TwilioClient]:
     except Exception as exc:  # noqa: BLE001
         logger.error(f"Failed to initialize Twilio client: {exc}")
         return None
+
+
+def enforce_twilio_signature() -> Optional[Response]:
+    """Validate Twilio request signatures when enabled."""
+    if request.method != "POST":
+        return None
+    if not TWILIO_VALIDATE_SIGNATURE:
+        return None
+    if not TWILIO_AUTH_TOKEN:
+        logger.warning("TWILIO_VALIDATE_SIGNATURE=true but TWILIO_AUTH_TOKEN is missing")
+        return Response("twilio auth token missing", status=500)
+    signature = request.headers.get("X-Twilio-Signature", "").strip()
+    if not signature:
+        return Response("missing twilio signature", status=403)
+    validator = RequestValidator(TWILIO_AUTH_TOKEN)
+    valid = validator.validate(
+        request.url,
+        request.form.to_dict(flat=True),
+        signature,
+    )
+    if not valid:
+        return Response("invalid twilio signature", status=403)
+    return None
 
 
 def send_payment_sms(caller_phone: str, payment_url: str) -> bool:
@@ -1072,7 +1110,7 @@ def ask_claude(call_sid: str, user_message: str) -> str:
 
     # Use prompt caching on the system prompt — cuts repeat-call latency ~60%
     response = get_anthropic_client().messages.create(
-        model="claude-haiku-4-5-20251001",   # 3-5x faster than Sonnet
+        model=ANTHROPIC_MODEL,
         max_tokens=150,                        # phone answers are short
         system=[
             {
@@ -1194,6 +1232,10 @@ def export_call_to_spreadsheet(caller_phone: str, caller_name: str, usage_date: 
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
     """Handle incoming calls — greet the caller."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     call_sid = request.form.get("CallSid", "unknown")
     caller = request.form.get("From", "unknown")
     caller_id = caller_identity(call_sid, caller)
@@ -1238,7 +1280,18 @@ def voice():
     has_paid = usage_store.has_paid_access(caller_id, usage_date)
     total_limit = FREE_DAILY_QUERIES + (PAID_DAILY_QUERIES if has_paid else 0)
 
-    # Hard cutoff: all questions exhausted
+    if used_today >= FREE_DAILY_QUERIES and not has_paid:
+        limit_message = build_limit_message(caller_id, usage_date)
+        logger.info(
+            f"[{call_sid[:8]}] Caller {caller_id} free limit hit "
+            f"({used_today}/{FREE_DAILY_QUERIES})"
+        )
+        return Response(
+            twiml_say(limit_message),
+            mimetype="text/xml"
+        )
+
+    # Hard cutoff: paid quota exhausted
     if used_today >= total_limit:
         logger.info(
             f"[{call_sid[:8]}] Caller {caller_id} all questions exhausted "
@@ -1248,18 +1301,6 @@ def voice():
             twiml_say(
                 "You've used all your questions for today. Please call back tomorrow."
             ),
-            mimetype="text/xml"
-        )
-
-    # Free limit hit, offer payment
-    if used_today >= FREE_DAILY_QUERIES and not has_paid:
-        limit_message = build_limit_message(caller_id, usage_date)
-        logger.info(
-            f"[{call_sid[:8]}] Caller {caller_id} free limit hit "
-            f"({used_today}/{FREE_DAILY_QUERIES})"
-        )
-        return Response(
-            twiml_say(limit_message),
             mimetype="text/xml"
         )
 
@@ -1295,6 +1336,10 @@ def voice():
 @app.route("/voice-menu", methods=["POST"])
 def voice_menu():
     """Route to question or subscription management."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     call_sid = request.form.get("CallSid", "unknown")
     caller = request.form.get("From", "unknown")
     selection = request.form.get("Digits", "")
@@ -1330,6 +1375,10 @@ def voice_menu():
 @app.route("/intro-name", methods=["GET", "POST"])
 def intro_name():
     """Capture caller name before main Q&A."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     call_sid = request.form.get("CallSid", "unknown")
     caller = request.form.get("From", "unknown")
     caller_id = caller_identity(call_sid, caller)
@@ -1357,20 +1406,17 @@ def intro_name():
     if call_sid in call_metadata:
         call_metadata[call_sid]["caller_name"] = caller_name
 
-    if usage_store.has_paid_access(caller_id, usage_date):
-        quota_line = "You're on paid access today."
+    used_today = usage_store.get_count(caller_id, usage_date)
+    has_paid = usage_store.has_paid_access(caller_id, usage_date)
+    if has_paid:
+        total_allowed = FREE_DAILY_QUERIES + PAID_DAILY_QUERIES
+        remaining = max(0, total_allowed - used_today)
+        question_word = "question" if remaining == 1 else "questions"
+        quota_line = f"Paid access is active. You have {remaining} {question_word} left today."
     else:
-        used_today = usage_store.get_count(caller_id, usage_date)
-        has_paid = usage_store.has_paid_access(caller_id, usage_date)
-        if has_paid:
-            total_allowed = FREE_DAILY_QUERIES + PAID_DAILY_QUERIES
-            remaining = max(0, total_allowed - used_today)
-            question_word = "question" if remaining == 1 else "questions"
-            quota_line = f"You have {remaining} {question_word} left today."
-        else:
-            remaining = max(0, FREE_DAILY_QUERIES - used_today)
-            question_word = "question" if remaining == 1 else "questions"
-            quota_line = f"You have {remaining} free {question_word} left today."
+        remaining = max(0, FREE_DAILY_QUERIES - used_today)
+        question_word = "question" if remaining == 1 else "questions"
+        quota_line = f"You have {remaining} free {question_word} left today."
 
     return Response(
         twiml_listen(
@@ -1386,6 +1432,10 @@ def intro_name():
 @app.route("/gather", methods=["GET", "POST"])
 def gather():
     """Handle speech input from the caller and respond via Claude."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     call_sid = request.form.get("CallSid", "unknown")
     caller = request.form.get("From", "unknown")
     caller_id = caller_identity(call_sid, caller)
@@ -1423,7 +1473,18 @@ def gather():
     used_before = usage_store.get_count(caller_id, usage_date)
     total_limit = FREE_DAILY_QUERIES + (PAID_DAILY_QUERIES if has_paid else 0)
 
-    # Hard cutoff: used all free + paid questions
+    if used_before >= FREE_DAILY_QUERIES and not has_paid:
+        limit_message = build_limit_message(caller_id, usage_date)
+        logger.info(
+            f"[{call_sid[:8]}] Free limit hit for {caller_id}: "
+            f"{used_before}/{FREE_DAILY_QUERIES}"
+        )
+        return Response(
+            twiml_say(limit_message),
+            mimetype="text/xml"
+        )
+
+    # Hard cutoff: paid quota exhausted
     if used_before >= total_limit:
         logger.info(
             f"[{call_sid[:8]}] All questions exhausted for {caller_id}: "
@@ -1436,24 +1497,9 @@ def gather():
             mimetype="text/xml"
         )
 
-    # Free limit hit, offer payment
-    if used_before >= FREE_DAILY_QUERIES and not has_paid:
-        limit_message = build_limit_message(caller_id, usage_date)
-        logger.info(
-            f"[{call_sid[:8]}] Free limit hit for {caller_id}: "
-            f"{used_before}/{FREE_DAILY_QUERIES}"
-        )
-        return Response(
-            twiml_say(limit_message),
-            mimetype="text/xml"
-        )
-
-    used_after = used_before
-    if not has_paid:
-        used_after = usage_store.increment(caller_id, usage_date)
+    used_after = usage_store.increment(caller_id, usage_date)
     logger.info(
-        f"[{call_sid[:8]}] Counted inquiry for {caller_id}: "
-        f"{used_after}/{FREE_DAILY_QUERIES}"
+        f"[{call_sid[:8]}] Counted inquiry for {caller_id}: {used_after}/{total_limit}"
     )
 
     policy_response = guardrail_response(speech_result)
@@ -1470,19 +1516,19 @@ def gather():
                 "Could you try asking me again?"
             )
 
-    total_limit = FREE_DAILY_QUERIES + (PAID_DAILY_QUERIES if has_paid else 0)
     remaining = max(0, total_limit - used_after)
 
-    # Hard cutoff: all 8 questions used (4 free + 4 paid)
+    # Hard cutoff: all daily questions used (free + paid quota, if unlocked)
     if remaining == 0:
         final_message = f"{ai_response} That's all your questions for today. Thanks for calling."
         return Response(twiml_say(final_message), mimetype="text/xml")
 
-    # After 4th free question: offer the 4 more
+    # After final free question: require paid unlock before allowing paid quota
     if used_after == FREE_DAILY_QUERIES and not has_paid:
-        message = f"{ai_response} You have 4 more free questions. Keep going!"
+        limit_message = build_limit_message(caller_id, usage_date)
+        message = f"{ai_response} {limit_message}"
         return Response(
-            twiml_listen(message, action="/gather"),
+            twiml_say(message),
             mimetype="text/xml"
         )
 
@@ -1498,6 +1544,10 @@ def gather():
 @app.route("/status", methods=["GET", "POST"])
 def status():
     """Call status webhook — clean up conversation and export to spreadsheet when call ends."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     call_sid = request.form.get("CallSid", "")
     call_status = request.form.get("CallStatus", "")
     caller_from = request.form.get("From", "")
@@ -1568,14 +1618,17 @@ def health():
     return {
         "status": "ok",
         "service": "Emmet AI",
-        "phone": "+17179225968",
+        "phone": SERVICE_PHONE_DISPLAY,
         "active_calls": len(conversations),
         "anthropic_configured": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
-        "model": "claude-haiku-4-5-20251001",
+        "model": ANTHROPIC_MODEL,
         "free_daily_queries": FREE_DAILY_QUERIES,
+        "paid_daily_queries": PAID_DAILY_QUERIES,
         "business_timezone": BUSINESS_TIMEZONE,
         "square_configured": bool(SQUARE_ACCESS_TOKEN and SQUARE_LOCATION_ID),
         "voice_name": VOICE_NAME,
+        "twilio_signature_validation": TWILIO_VALIDATE_SIGNATURE,
+        "version": APP_VERSION,
     }
 
 
@@ -2029,6 +2082,10 @@ def twiml_subscription_menu(phone: str) -> str:
 @app.route("/subscribe-menu", methods=["GET", "POST"])
 def subscribe_menu():
     """Show subscription menu."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     phone = request.args.get("phone", request.form.get("From", "unknown"))
     call_sid = request.form.get("CallSid", "unknown")
     call_metadata[call_sid] = {"from": phone}
@@ -2037,6 +2094,10 @@ def subscribe_menu():
 @app.route("/gather-plan-selection", methods=["POST"])
 def gather_plan_selection():
     """Handle plan selection."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     phone = request.args.get("phone", "unknown")
     selection = request.form.get("Digits", "")
 
@@ -2078,6 +2139,10 @@ def gather_plan_selection():
 @app.route("/gather-payment-method", methods=["POST"])
 def gather_payment_method():
     """Route to voice or SMS payment."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     phone = request.args.get("phone", "unknown")
     plan = request.args.get("plan", "paid_9")
     amount = int(request.args.get("amount", 999))
@@ -2119,6 +2184,10 @@ def gather_payment_method():
 @app.route("/process-card-number", methods=["POST"])
 def process_card_number():
     """Process card number, ask for expiration."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     phone = request.args.get("phone", "unknown")
     plan = request.args.get("plan", "paid_9")
     amount = int(request.args.get("amount", 999))
@@ -2168,6 +2237,10 @@ def process_card_number():
 @app.route("/process-card-expiration", methods=["POST"])
 def process_card_expiration():
     """Process expiration, ask for CVV."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     session_key = request.args.get("session")
     expiration = request.form.get("Digits", "").replace("#", "").strip()
 
@@ -2220,6 +2293,10 @@ def process_card_expiration():
 @app.route("/process-card-cvv", methods=["POST"])
 def process_card_cvv():
     """Charge card via Square."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     session_key = request.args.get("session")
     cvv = request.form.get("Digits", "").replace("#", "").strip()
 
@@ -2353,6 +2430,10 @@ def twiml_send_payment_link(phone: str, plan: str, amount: int) -> str:
 @app.route("/fallback-sms-link", methods=["POST"])
 def fallback_sms_link():
     """Fallback to SMS if voice payment fails."""
+    sig_err = enforce_twilio_signature()
+    if sig_err:
+        return sig_err
+
     phone = request.args.get("phone", "unknown")
     plan = request.args.get("plan", "paid_9")
     amount = int(request.args.get("amount", 999))
@@ -2361,7 +2442,8 @@ def fallback_sms_link():
         mimetype="text/xml"
     )
 
-# Initialize customer database on startup
+# Initialize databases on startup
+initialize_farming_knowledge_db()
 initialize_customer_database()
 
 
@@ -2371,4 +2453,3 @@ if __name__ == "__main__":
     logger.info(f"Starting Emmet AI agent on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
 # Updated Mon Mar  2 00:38:10 UTC 2026
-
