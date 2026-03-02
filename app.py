@@ -1835,12 +1835,12 @@ def admin_stats():
             active_subs = conn.execute("SELECT COUNT(*) as c FROM subscriptions WHERE status='active'").fetchone()["c"]
             total_revenue = conn.execute("SELECT COALESCE(SUM(amount_cents),0) as c FROM payments WHERE status='completed'").fetchone()["c"]
             today = datetime.now(ZoneInfo(BUSINESS_TIMEZONE)).strftime("%Y-%m-%d")
-            calls_today = conn.execute("SELECT COUNT(*) as c FROM call_logs WHERE date(timestamp)=?", (today,)).fetchone()["c"]
+            calls_today = conn.execute("SELECT COUNT(DISTINCT call_sid) as c FROM call_logs WHERE usage_date=?", (today,)).fetchone()["c"]
             recent_payments = [dict(r) for r in conn.execute(
                 "SELECT p.*, c.phone FROM payments p LEFT JOIN customers c ON p.customer_id=c.id ORDER BY p.created_at DESC LIMIT 5"
             ).fetchall()]
             recent_calls = [dict(r) for r in conn.execute(
-                "SELECT * FROM call_logs ORDER BY timestamp DESC LIMIT 5"
+                "SELECT call_sid, caller_phone, caller_name, MAX(turn_number) as turns, usage_date, MAX(created_at) as last_at FROM call_logs GROUP BY call_sid ORDER BY last_at DESC LIMIT 5"
             ).fetchall()]
         return {
             "total_customers": total_customers,
@@ -1942,7 +1942,7 @@ def admin_call_logs():
         with usage_store._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM call_logs ORDER BY timestamp DESC LIMIT ?", (limit,)
+                "SELECT call_sid, caller_phone, caller_name, turn_number, user_message, assistant_message, latency_ms, usage_date, created_at FROM call_logs ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return Response(json.dumps([dict(r) for r in rows], indent=2), mimetype="application/json")
     except Exception as e:
