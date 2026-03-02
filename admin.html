@@ -1,0 +1,1726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emmet AI Admin Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-bg: #0f1419;
+            --secondary-bg: #1a1f2e;
+            --tertiary-bg: #252d3d;
+            --accent-color: #10b981;
+            --accent-light: #34d399;
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --border-color: #334155;
+            --error-color: #ef4444;
+            --warning-color: #f59e0b;
+            --success-color: #10b981;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, var(--primary-bg) 0%, var(--secondary-bg) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Header & Navigation */
+        .header {
+            background: var(--secondary-bg);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .header-title {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--accent-light);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            background: var(--tertiary-bg);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--warning-color);
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.online {
+            background: var(--success-color);
+        }
+
+        .status-dot.offline {
+            background: var(--error-color);
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .auto-refresh-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 2.5rem;
+            height: 1.25rem;
+            background: var(--tertiary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .toggle-switch.active {
+            background: var(--accent-color);
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 1rem;
+            height: 1rem;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: left 0.3s;
+        }
+
+        .toggle-switch.active::after {
+            left: calc(100% - 1rem - 2px);
+        }
+
+        /* Auth Section */
+        .auth-section {
+            background: var(--secondary-bg);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.5rem 2rem;
+        }
+
+        .auth-form {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+            max-width: 500px;
+        }
+
+        .form-group {
+            flex: 1;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--tertiary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.375rem;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: var(--accent-color);
+            color: var(--primary-bg);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-light);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--tertiary-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border-color);
+        }
+
+        .btn-danger {
+            background: var(--error-color);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Main Content */
+        .main-container {
+            padding: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .tab-button {
+            padding: 1rem 1.5rem;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .tab-button:hover {
+            color: var(--text-primary);
+        }
+
+        .tab-button.active {
+            color: var(--accent-light);
+            border-bottom-color: var(--accent-color);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--secondary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--secondary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-light);
+        }
+
+        /* Tables */
+        .table-wrapper {
+            overflow-x: auto;
+            margin-bottom: 1.5rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        thead {
+            background: var(--tertiary-bg);
+        }
+
+        th {
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        th:hover {
+            color: var(--accent-light);
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+
+        tbody tr:hover {
+            background: var(--tertiary-bg);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-success {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success-color);
+        }
+
+        .badge-warning {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning-color);
+        }
+
+        .badge-danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--error-color);
+        }
+
+        .badge-primary {
+            background: rgba(59, 130, 246, 0.2);
+            color: #3b82f6;
+        }
+
+        /* Loading & Empty States */
+        .loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem 1rem;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem 1rem;
+            text-align: center;
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 0.375rem;
+            padding: 1rem;
+            color: #fca5a5;
+            margin-bottom: 1.5rem;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        /* Activity Feed */
+        .activity-feed {
+            max-width: 600px;
+        }
+
+        .activity-item {
+            padding: 1rem 0;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 1rem;
+        }
+
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+
+        .activity-time {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            min-width: 80px;
+        }
+
+        .activity-text {
+            flex: 1;
+        }
+
+        .activity-text strong {
+            color: var(--accent-light);
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--secondary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 2rem;
+            max-width: 600px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        /* Expandable Row */
+        .expandable-content {
+            display: none;
+            background: var(--tertiary-bg);
+            padding: 1.5rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .expandable-content.show {
+            display: block;
+        }
+
+        .expand-button {
+            background: none;
+            border: none;
+            color: var(--accent-color);
+            cursor: pointer;
+            padding: 0.5rem;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        /* Search & Filters */
+        .controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .control-group input,
+        .control-group select {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--tertiary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.375rem;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+
+        .control-group select {
+            cursor: pointer;
+        }
+
+        /* Service Config Links */
+        .config-links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .config-link-card {
+            background: var(--tertiary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .config-link-card:hover {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.1);
+        }
+
+        .config-link-card h3 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .config-link-card a {
+            display: inline-block;
+            color: var(--accent-color);
+            text-decoration: none;
+            font-weight: 500;
+            word-break: break-all;
+        }
+
+        .config-link-card a:hover {
+            color: var(--accent-light);
+        }
+
+        /* Knowledge Base */
+        .kb-form {
+            background: var(--tertiary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .kb-entry {
+            background: var(--tertiary-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.375rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            gap: 1rem;
+        }
+
+        .kb-entry-content h4 {
+            margin-bottom: 0.5rem;
+            color: var(--accent-light);
+        }
+
+        .kb-entry-content p {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        .kb-entry-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header {
+                padding: 1rem;
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .header-left {
+                width: 100%;
+            }
+
+            .header-right {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            .main-container {
+                padding: 1rem;
+            }
+
+            .tabs {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .tab-button {
+                padding: 0.75rem 1rem;
+                font-size: 0.85rem;
+            }
+
+            .auth-form {
+                flex-direction: column;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            table {
+                font-size: 0.75rem;
+            }
+
+            th, td {
+                padding: 0.75rem 0.5rem;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+
+            .control-group {
+                min-width: unset;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <h1 class="header-title">Emmet AI Admin Dashboard</h1>
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Checking...</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="auto-refresh-toggle">
+                <label>Auto-Refresh</label>
+                <div class="toggle-switch" id="autoRefreshToggle"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Section -->
+    <div class="auth-section">
+        <div class="auth-form">
+            <div class="form-group">
+                <label for="adminToken">Admin Token</label>
+                <input
+                    type="password"
+                    id="adminToken"
+                    placeholder="Enter your admin token"
+                    autocomplete="off"
+                >
+            </div>
+            <button class="btn btn-primary" id="setTokenBtn">Set Token</button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <div id="authError" class="error-message"></div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab-button active" data-tab="overview">Overview</button>
+            <button class="tab-button" data-tab="customers">Customers</button>
+            <button class="tab-button" data-tab="subscriptions">Subscriptions</button>
+            <button class="tab-button" data-tab="payments">Payments</button>
+            <button class="tab-button" data-tab="calls">Call Logs</button>
+            <button class="tab-button" data-tab="knowledge">Knowledge Base</button>
+            <button class="tab-button" data-tab="config">Service Config</button>
+        </div>
+
+        <!-- Tab 1: Overview -->
+        <div class="tab-content active" id="overview">
+            <div id="overviewError" class="error-message"></div>
+            <div id="overviewLoading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <span>Loading overview...</span>
+            </div>
+            <div id="overviewContent" style="display: none;">
+                <div class="stats-grid" id="statsGrid"></div>
+                <div class="card">
+                    <h2 style="margin-bottom: 1.5rem;">Recent Activity</h2>
+                    <div class="activity-feed" id="activityFeed"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 2: Customers -->
+        <div class="tab-content" id="customers">
+            <div id="customersError" class="error-message"></div>
+            <div class="controls">
+                <div class="control-group">
+                    <input
+                        type="text"
+                        id="customerSearch"
+                        placeholder="Search by phone or name..."
+                    >
+                </div>
+                <div class="control-group">
+                    <select id="customerStatus">
+                        <option value="">All Status</option>
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+            </div>
+            <div id="customersLoading" class="loading">
+                <div class="spinner"></div>
+                <span>Loading customers...</span>
+            </div>
+            <div id="customersContent" style="display: none;">
+                <div class="table-wrapper">
+                    <table id="customersTable">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Phone</th>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Last Call</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="customersTableBody"></tbody>
+                    </table>
+                </div>
+                <div id="customersEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-icon">👥</div>
+                    <p>No customers found</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 3: Subscriptions -->
+        <div class="tab-content" id="subscriptions">
+            <div id="subscriptionsError" class="error-message"></div>
+            <div class="controls">
+                <div class="control-group">
+                    <select id="subscriptionPlan">
+                        <option value="">All Plans</option>
+                        <option value="starter">Starter</option>
+                        <option value="pro">Pro</option>
+                        <option value="enterprise">Enterprise</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <select id="subscriptionStatus">
+                        <option value="">All Status</option>
+                        <option value="active">Active</option>
+                        <option value="paused">Paused</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+            </div>
+            <div id="subscriptionsLoading" class="loading">
+                <div class="spinner"></div>
+                <span>Loading subscriptions...</span>
+            </div>
+            <div id="subscriptionsContent" style="display: none;">
+                <div class="table-wrapper">
+                    <table id="subscriptionsTable">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Customer Phone</th>
+                                <th>Plan</th>
+                                <th>Status</th>
+                                <th>Started</th>
+                                <th>Renewal Date</th>
+                                <th>Auto-Renew</th>
+                            </tr>
+                        </thead>
+                        <tbody id="subscriptionsTableBody"></tbody>
+                    </table>
+                </div>
+                <div id="subscriptionsEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-icon">📅</div>
+                    <p>No subscriptions found</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 4: Payments -->
+        <div class="tab-content" id="payments">
+            <div id="paymentsError" class="error-message"></div>
+            <div class="card">
+                <div class="stat-card" style="text-align: left;">
+                    <h3>Total Revenue</h3>
+                    <div class="value" id="totalRevenue">$0.00</div>
+                </div>
+            </div>
+            <div class="controls">
+                <div class="control-group">
+                    <select id="paymentStatus">
+                        <option value="">All Status</option>
+                        <option value="pending">Pending</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                        <option value="refunded">Refunded</option>
+                    </select>
+                </div>
+            </div>
+            <div id="paymentsLoading" class="loading">
+                <div class="spinner"></div>
+                <span>Loading payments...</span>
+            </div>
+            <div id="paymentsContent" style="display: none;">
+                <div class="table-wrapper">
+                    <table id="paymentsTable">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Customer</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                                <th>Source</th>
+                                <th>Paid At</th>
+                                <th>Order ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="paymentsTableBody"></tbody>
+                    </table>
+                </div>
+                <div id="paymentsEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-icon">💳</div>
+                    <p>No payments found</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 5: Call Logs -->
+        <div class="tab-content" id="calls">
+            <div id="callsError" class="error-message"></div>
+            <div id="callsLoading" class="loading">
+                <div class="spinner"></div>
+                <span>Loading call logs...</span>
+            </div>
+            <div id="callsContent" style="display: none;">
+                <div class="table-wrapper">
+                    <table id="callsTable">
+                        <thead>
+                            <tr>
+                                <th>Phone</th>
+                                <th>Timestamp</th>
+                                <th>Questions Used</th>
+                                <th>Paid Status</th>
+                                <th>Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="callsTableBody"></tbody>
+                    </table>
+                </div>
+                <div id="callsEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-icon">☎️</div>
+                    <p>No call logs found</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 6: Knowledge Base -->
+        <div class="tab-content" id="knowledge">
+            <div id="knowledgeError" class="error-message"></div>
+
+            <div class="kb-form">
+                <h2 style="margin-bottom: 1.5rem;">Add New Knowledge Entry</h2>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="kbTitle">Title</label>
+                        <input type="text" id="kbTitle" placeholder="Entry title">
+                    </div>
+                    <div class="form-group">
+                        <label for="kbCategory">Category</label>
+                        <input type="text" id="kbCategory" placeholder="e.g., Crops, Animals, Tools">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="kbContent">Content</label>
+                    <input
+                        type="text"
+                        id="kbContent"
+                        placeholder="Knowledge entry content"
+                        style="height: 100px; padding: 0.75rem; font-family: monospace; resize: vertical;"
+                    >
+                </div>
+                <button class="btn btn-primary" id="addKbBtn">Add Entry</button>
+            </div>
+
+            <div id="knowledgeLoading" class="loading">
+                <div class="spinner"></div>
+                <span>Loading knowledge base...</span>
+            </div>
+            <div id="knowledgeContent" style="display: none;">
+                <div id="knowledgeList"></div>
+                <div id="knowledgeEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-icon">📚</div>
+                    <p>No knowledge entries found</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 7: Service Config -->
+        <div class="tab-content" id="config">
+            <div class="card">
+                <h2 style="margin-bottom: 1.5rem;">External Service Links</h2>
+                <div class="config-links">
+                    <div class="config-link-card">
+                        <h3>Render Dashboard</h3>
+                        <a href="https://dashboard.render.com" target="_blank">dashboard.render.com</a>
+                    </div>
+                    <div class="config-link-card">
+                        <h3>Square Dashboard</h3>
+                        <a href="https://squareup.com/dashboard" target="_blank">squareup.com/dashboard</a>
+                    </div>
+                    <div class="config-link-card">
+                        <h3>Twilio Console</h3>
+                        <a href="https://console.twilio.com" target="_blank">console.twilio.com</a>
+                    </div>
+                    <div class="config-link-card">
+                        <h3>GitHub Repository</h3>
+                        <a href="https://github.com/josephkunin-cmyk/emmetai-agent" target="_blank">github.com/josephkunin-cmyk/emmetai-agent</a>
+                    </div>
+                    <div class="config-link-card">
+                        <h3>Emmet AI Website</h3>
+                        <a href="https://emmetai.com" target="_blank">emmetai.com</a>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <h2 style="margin-bottom: 1.5rem;">Environment Configuration</h2>
+                <div id="configContent">
+                    <p>Base URL: <code style="background: var(--tertiary-bg); padding: 0.25rem 0.5rem; border-radius: 0.25rem;">https://emmetai-agent.onrender.com</code></p>
+                    <p style="margin-top: 1rem; color: var(--text-secondary);">Note: Sensitive environment variables are not displayed for security reasons.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Customer Details -->
+    <div class="modal" id="customerModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>Customer Details</span>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div id="customerModalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const BASE_URL = 'https://emmetai-agent.onrender.com';
+        const REFRESH_INTERVAL = 30000; // 30 seconds
+
+        // State
+        let adminToken = '';
+        let autoRefreshEnabled = false;
+        let refreshIntervals = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeApp();
+        });
+
+        function initializeApp() {
+            // Load token from localStorage
+            const savedToken = localStorage.getItem('emmet_admin_token');
+            if (savedToken) {
+                adminToken = savedToken;
+                document.getElementById('adminToken').value = '••••••••';
+                loadDashboard();
+            }
+
+            // Event listeners
+            document.getElementById('setTokenBtn').addEventListener('click', setToken);
+            document.getElementById('adminToken').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') setToken();
+            });
+
+            // Tab switching
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.addEventListener('click', switchTab);
+            });
+
+            // Auto-refresh toggle
+            document.getElementById('autoRefreshToggle').addEventListener('click', toggleAutoRefresh);
+
+            // Modal close
+            document.querySelector('.modal-close').addEventListener('click', () => {
+                document.getElementById('customerModal').classList.remove('show');
+            });
+
+            // Search and filters
+            document.getElementById('customerSearch').addEventListener('input', filterCustomers);
+            document.getElementById('customerStatus').addEventListener('change', filterCustomers);
+            document.getElementById('subscriptionPlan').addEventListener('change', filterSubscriptions);
+            document.getElementById('subscriptionStatus').addEventListener('change', filterSubscriptions);
+            document.getElementById('paymentStatus').addEventListener('change', filterPayments);
+
+            // Knowledge base
+            document.getElementById('addKbBtn').addEventListener('click', addKnowledgeEntry);
+
+            // Check health status
+            checkServiceHealth();
+        }
+
+        function setToken() {
+            const tokenInput = document.getElementById('adminToken');
+            const token = tokenInput.value;
+
+            if (!token || token === '••••••••') {
+                showError('authError', 'Please enter a valid token');
+                return;
+            }
+
+            adminToken = token;
+            localStorage.setItem('emmet_admin_token', token);
+            tokenInput.value = '••••••••';
+
+            clearError('authError');
+            loadDashboard();
+        }
+
+        function switchTab(e) {
+            // Deactivate all tabs
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            // Activate clicked tab
+            e.target.classList.add('active');
+            const tabName = e.target.dataset.tab;
+            document.getElementById(tabName).classList.add('active');
+
+            // Load data for this tab
+            loadTabData(tabName);
+        }
+
+        function loadDashboard() {
+            checkServiceHealth();
+            loadTabData('overview');
+        }
+
+        async function checkServiceHealth() {
+            try {
+                const response = await fetch(`${BASE_URL}/health`);
+                const statusDot = document.getElementById('statusDot');
+                const statusText = document.getElementById('statusText');
+
+                if (response.ok) {
+                    statusDot.classList.add('online');
+                    statusDot.classList.remove('offline');
+                    statusText.textContent = 'Online';
+                } else {
+                    statusDot.classList.remove('online');
+                    statusDot.classList.add('offline');
+                    statusText.textContent = 'Offline';
+                }
+            } catch (error) {
+                document.getElementById('statusDot').classList.add('offline');
+                document.getElementById('statusText').textContent = 'Offline';
+            }
+        }
+
+        async function loadTabData(tabName) {
+            switch(tabName) {
+                case 'overview':
+                    await loadOverview();
+                    break;
+                case 'customers':
+                    await loadCustomers();
+                    break;
+                case 'subscriptions':
+                    await loadSubscriptions();
+                    break;
+                case 'payments':
+                    await loadPayments();
+                    break;
+                case 'calls':
+                    await loadCallLogs();
+                    break;
+                case 'knowledge':
+                    await loadKnowledgeBase();
+                    break;
+            }
+        }
+
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            if (!adminToken) {
+                showError('authError', 'Please set admin token first');
+                return null;
+            }
+
+            try {
+                const options = {
+                    method,
+                    headers: {
+                        'X-Admin-Token': adminToken,
+                        'Content-Type': 'application/json'
+                    }
+                };
+
+                if (body) {
+                    options.body = JSON.stringify(body);
+                }
+
+                const response = await fetch(`${BASE_URL}${endpoint}`, options);
+
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem('emmet_admin_token');
+                    adminToken = '';
+                    document.getElementById('adminToken').value = '';
+                    showError('authError', 'Authentication failed. Please set a valid token.');
+                    return null;
+                }
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                return await response.json();
+            } catch (error) {
+                console.error('API Error:', error);
+                return null;
+            }
+        }
+
+        async function loadOverview() {
+            const loading = document.getElementById('overviewLoading');
+            const content = document.getElementById('overviewContent');
+            const error = document.getElementById('overviewError');
+
+            loading.style.display = 'flex';
+            content.style.display = 'none';
+            clearError('overviewError');
+
+            try {
+                // Load stats
+                const stats = await apiCall('/admin/stats');
+
+                if (!stats) {
+                    throw new Error('Failed to load stats');
+                }
+
+                // Render stats
+                const statsGrid = document.getElementById('statsGrid');
+                statsGrid.innerHTML = `
+                    <div class="stat-card">
+                        <h3>Total Customers</h3>
+                        <div class="value">${stats.total_customers || 0}</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Active Subscriptions</h3>
+                        <div class="value">${stats.active_subscriptions || 0}</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Total Revenue</h3>
+                        <div class="value">$${(stats.total_revenue || 0).toFixed(2)}</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Calls Today</h3>
+                        <div class="value">${stats.calls_today || 0}</div>
+                    </div>
+                `;
+
+                // Load activity feed
+                const calls = await apiCall('/admin/call-logs?limit=10');
+                const activityFeed = document.getElementById('activityFeed');
+
+                if (calls && calls.length > 0) {
+                    activityFeed.innerHTML = calls.map(call => `
+                        <div class="activity-item">
+                            <div class="activity-time">${formatTime(call.timestamp)}</div>
+                            <div class="activity-text">
+                                <strong>${call.phone}</strong> made a call using ${call.questions_used} questions
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    activityFeed.innerHTML = '<div class="empty-state"><p>No recent activity</p></div>';
+                }
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+            } catch (error) {
+                showError('overviewError', 'Failed to load overview data');
+                loading.style.display = 'none';
+            }
+        }
+
+        async function loadCustomers() {
+            const loading = document.getElementById('customersLoading');
+            const content = document.getElementById('customersContent');
+            const error = document.getElementById('customersError');
+
+            loading.style.display = 'flex';
+            content.style.display = 'none';
+            clearError('customersError');
+
+            try {
+                const data = await apiCall('/admin/customers');
+
+                if (!data) {
+                    throw new Error('Failed to load customers');
+                }
+
+                window.allCustomers = data.customers || [];
+                renderCustomersTable(window.allCustomers);
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+            } catch (error) {
+                showError('customersError', 'Failed to load customers');
+                loading.style.display = 'none';
+            }
+        }
+
+        function renderCustomersTable(customers) {
+            const tbody = document.getElementById('customersTableBody');
+            const empty = document.getElementById('customersEmpty');
+
+            if (!customers || customers.length === 0) {
+                tbody.innerHTML = '';
+                empty.style.display = 'flex';
+                return;
+            }
+
+            empty.style.display = 'none';
+            tbody.innerHTML = customers.map((customer, index) => `
+                <tr>
+                    <td>${customer.id || '-'}</td>
+                    <td>${customer.phone || '-'}</td>
+                    <td>${customer.name || '-'}</td>
+                    <td>${customer.email || '-'}</td>
+                    <td><span class="badge badge-success">${customer.status || 'active'}</span></td>
+                    <td>${formatDate(customer.created_at) || '-'}</td>
+                    <td>${formatDate(customer.last_call) || 'Never'}</td>
+                    <td>
+                        <button class="btn btn-secondary" onclick="viewCustomerDetails(${index})" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Details</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function filterCustomers() {
+            const search = document.getElementById('customerSearch').value.toLowerCase();
+            const status = document.getElementById('customerStatus').value;
+
+            const filtered = window.allCustomers.filter(customer => {
+                const matchesSearch = !search ||
+                    (customer.phone && customer.phone.includes(search)) ||
+                    (customer.name && customer.name.toLowerCase().includes(search));
+                const matchesStatus = !status || customer.status === status;
+                return matchesSearch && matchesStatus;
+            });
+
+            renderCustomersTable(filtered);
+        }
+
+        function viewCustomerDetails(index) {
+            const customer = window.allCustomers[index];
+            const modal = document.getElementById('customerModal');
+            const modalBody = document.getElementById('customerModalBody');
+
+            modalBody.innerHTML = `
+                <div class="card">
+                    <h3>Customer Information</h3>
+                    <p><strong>ID:</strong> ${customer.id || '-'}</p>
+                    <p><strong>Phone:</strong> ${customer.phone || '-'}</p>
+                    <p><strong>Name:</strong> ${customer.name || '-'}</p>
+                    <p><strong>Email:</strong> ${customer.email || '-'}</p>
+                    <p><strong>Status:</strong> <span class="badge badge-success">${customer.status || 'active'}</span></p>
+                    <p><strong>Created:</strong> ${formatDate(customer.created_at) || '-'}</p>
+                    <p><strong>Last Call:</strong> ${formatDate(customer.last_call) || 'Never'}</p>
+                </div>
+                <div class="card">
+                    <h3>Subscriptions</h3>
+                    <p>${customer.subscriptions ? customer.subscriptions.length : 0} active subscription(s)</p>
+                </div>
+                <div class="card">
+                    <h3>Payment History</h3>
+                    <p>${customer.payments ? customer.payments.length : 0} payment(s)</p>
+                </div>
+            `;
+
+            modal.classList.add('show');
+        }
+
+        async function loadSubscriptions() {
+            const loading = document.getElementById('subscriptionsLoading');
+            const content = document.getElementById('subscriptionsContent');
+            const error = document.getElementById('subscriptionsError');
+
+            loading.style.display = 'flex';
+            content.style.display = 'none';
+            clearError('subscriptionsError');
+
+            try {
+                const data = await apiCall('/admin/subscriptions');
+
+                if (!data) {
+                    throw new Error('Failed to load subscriptions');
+                }
+
+                window.allSubscriptions = data.subscriptions || [];
+                renderSubscriptionsTable(window.allSubscriptions);
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+            } catch (error) {
+                showError('subscriptionsError', 'Failed to load subscriptions');
+                loading.style.display = 'none';
+            }
+        }
+
+        function renderSubscriptionsTable(subscriptions) {
+            const tbody = document.getElementById('subscriptionsTableBody');
+            const empty = document.getElementById('subscriptionsEmpty');
+
+            if (!subscriptions || subscriptions.length === 0) {
+                tbody.innerHTML = '';
+                empty.style.display = 'flex';
+                return;
+            }
+
+            empty.style.display = 'none';
+            tbody.innerHTML = subscriptions.map(sub => `
+                <tr>
+                    <td>${sub.id || '-'}</td>
+                    <td>${sub.customer_phone || '-'}</td>
+                    <td><span class="badge badge-primary">${sub.plan || '-'}</span></td>
+                    <td><span class="badge ${sub.status === 'active' ? 'badge-success' : 'badge-warning'}">${sub.status || '-'}</span></td>
+                    <td>${formatDate(sub.started_at) || '-'}</td>
+                    <td>${formatDate(sub.renewal_date) || '-'}</td>
+                    <td>${sub.auto_renew ? '✓' : '✗'}</td>
+                </tr>
+            `).join('');
+        }
+
+        function filterSubscriptions() {
+            const plan = document.getElementById('subscriptionPlan').value;
+            const status = document.getElementById('subscriptionStatus').value;
+
+            const filtered = window.allSubscriptions.filter(sub => {
+                const matchesPlan = !plan || sub.plan === plan;
+                const matchesStatus = !status || sub.status === status;
+                return matchesPlan && matchesStatus;
+            });
+
+            renderSubscriptionsTable(filtered);
+        }
+
+        async function loadPayments() {
+            const loading = document.getElementById('paymentsLoading');
+            const content = document.getElementById('paymentsContent');
+            const error = document.getElementById('paymentsError');
+
+            loading.style.display = 'flex';
+            content.style.display = 'none';
+            clearError('paymentsError');
+
+            try {
+                const data = await apiCall('/admin/payments');
+
+                if (!data) {
+                    throw new Error('Failed to load payments');
+                }
+
+                window.allPayments = data.payments || [];
+
+                // Calculate total revenue
+                const totalRevenue = window.allPayments.reduce((sum, p) => {
+                    return sum + (p.status === 'completed' ? (p.amount || 0) : 0);
+                }, 0);
+                document.getElementById('totalRevenue').textContent = `$${totalRevenue.toFixed(2)}`;
+
+                renderPaymentsTable(window.allPayments);
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+            } catch (error) {
+                showError('paymentsError', 'Failed to load payments');
+                loading.style.display = 'none';
+            }
+        }
+
+        function renderPaymentsTable(payments) {
+            const tbody = document.getElementById('paymentsTableBody');
+            const empty = document.getElementById('paymentsEmpty');
+
+            if (!payments || payments.length === 0) {
+                tbody.innerHTML = '';
+                empty.style.display = 'flex';
+                return;
+            }
+
+            empty.style.display = 'none';
+            tbody.innerHTML = payments.map(payment => `
+                <tr>
+                    <td>${payment.id || '-'}</td>
+                    <td>${payment.customer_phone || '-'}</td>
+                    <td>$${(payment.amount || 0).toFixed(2)}</td>
+                    <td>
+                        <span class="badge ${
+                            payment.status === 'completed' ? 'badge-success' :
+                            payment.status === 'pending' ? 'badge-warning' :
+                            'badge-danger'
+                        }">
+                            ${payment.status || '-'}
+                        </span>
+                    </td>
+                    <td>${payment.source || '-'}</td>
+                    <td>${formatDate(payment.paid_at) || '-'}</td>
+                    <td>${payment.order_id || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        function filterPayments() {
+            const status = document.getElementById('paymentStatus').value;
+
+            const filtered = window.allPayments.filter(payment => {
+                return !status || payment.status === status;
+            });
+
+            renderPaymentsTable(filtered);
+        }
+
+        async function loadCallLogs() {
+            const loading = document.getElementById('callsLoading');
+            const content = document.getElementById('callsContent');
+            const error = document.getElementById('callsError');
+
+            loading.style.display = 'flex';
+            content.style.display = 'none';
+            clearError('callsError');
+
+            try {
+                const data = await apiCall('/admin/call-logs');
+
+                if (!data) {
+                    throw new Error('Failed to load call logs');
+                }
+
+                const calls = data.calls || [];
+                const tbody = document.getElementById('callsTableBody');
+                const empty = document.getElementById('callsEmpty');
+
+                if (!calls || calls.length === 0) {
+                    tbody.innerHTML = '';
+                    empty.style.display = 'flex';
+                } else {
+                    empty.style.display = 'none';
+                    tbody.innerHTML = calls.map(call => `
+                        <tr>
+                            <td>${call.phone || '-'}</td>
+                            <td>${formatDate(call.timestamp) || '-'}</td>
+                            <td>${call.questions_used || 0}</td>
+                            <td><span class="badge badge-success">${call.paid_status || 'paid'}</span></td>
+                            <td>${call.duration_seconds ? `${call.duration_seconds}s` : '-'}</td>
+                        </tr>
+                    `).join('');
+                }
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+            } catch (error) {
+                showError('callsError', 'Failed to load call logs');
+                loading.style.display = 'none';
+            }
+        }
+
+        async function loadKnowledgeBase() {
+            const loading = document.getElementById('knowledgeLoading');
+            const content = document.getElementById('knowledgeContent');
+            const error = document.getElementById('knowledgeError');
+
+            loading.style.display = 'flex';
+            content.style.display = 'none';
+            clearError('knowledgeError');
+
+            try {
+                const data = await apiCall('/admin/knowledge');
+
+                if (!data) {
+                    throw new Error('Failed to load knowledge base');
+                }
+
+                const entries = data.entries || [];
+                const list = document.getElementById('knowledgeList');
+                const empty = document.getElementById('knowledgeEmpty');
+
+                if (!entries || entries.length === 0) {
+                    list.innerHTML = '';
+                    empty.style.display = 'flex';
+                } else {
+                    empty.style.display = 'none';
+                    list.innerHTML = entries.map((entry, index) => `
+                        <div class="kb-entry">
+                            <div class="kb-entry-content">
+                                <h4>${entry.title || 'Untitled'}</h4>
+                                <p><strong>Category:</strong> ${entry.category || 'General'}</p>
+                                <p>${entry.content || ''}</p>
+                            </div>
+                            <div class="kb-entry-actions">
+                                <button class="btn btn-danger" onclick="deleteKnowledgeEntry('${entry.id}')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem;">Delete</button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                loading.style.display = 'none';
+                content.style.display = 'block';
+            } catch (error) {
+                showError('knowledgeError', 'Failed to load knowledge base');
+                loading.style.display = 'none';
+            }
+        }
+
+        async function addKnowledgeEntry() {
+            const title = document.getElementById('kbTitle').value;
+            const category = document.getElementById('kbCategory').value;
+            const content = document.getElementById('kbContent').value;
+
+            if (!title || !category || !content) {
+                showError('knowledgeError', 'Please fill in all fields');
+                return;
+            }
+
+            try {
+                const result = await apiCall('/admin/knowledge', 'POST', {
+                    title,
+                    category,
+                    content
+                });
+
+                if (result) {
+                    document.getElementById('kbTitle').value = '';
+                    document.getElementById('kbCategory').value = '';
+                    document.getElementById('kbContent').value = '';
+                    clearError('knowledgeError');
+                    await loadKnowledgeBase();
+                } else {
+                    showError('knowledgeError', 'Failed to add entry');
+                }
+            } catch (error) {
+                showError('knowledgeError', 'Failed to add entry');
+            }
+        }
+
+        async function deleteKnowledgeEntry(entryId) {
+            if (!confirm('Are you sure you want to delete this entry?')) {
+                return;
+            }
+
+            try {
+                const result = await apiCall(`/admin/knowledge/${entryId}`, 'DELETE');
+
+                if (result) {
+                    clearError('knowledgeError');
+                    await loadKnowledgeBase();
+                } else {
+                    showError('knowledgeError', 'Failed to delete entry');
+                }
+            } catch (error) {
+                showError('knowledgeError', 'Failed to delete entry');
+            }
+        }
+
+        function toggleAutoRefresh() {
+            const toggle = document.getElementById('autoRefreshToggle');
+            autoRefreshEnabled = !autoRefreshEnabled;
+
+            if (autoRefreshEnabled) {
+                toggle.classList.add('active');
+                startAutoRefresh();
+            } else {
+                toggle.classList.remove('active');
+                stopAutoRefresh();
+            }
+        }
+
+        function startAutoRefresh() {
+            // Clear existing intervals
+            refreshIntervals.forEach(interval => clearInterval(interval));
+            refreshIntervals = [];
+
+            // Set new interval
+            const interval = setInterval(() => {
+                checkServiceHealth();
+                const activeTab = document.querySelector('.tab-button.active').dataset.tab;
+                loadTabData(activeTab);
+            }, REFRESH_INTERVAL);
+
+            refreshIntervals.push(interval);
+        }
+
+        function stopAutoRefresh() {
+            refreshIntervals.forEach(interval => clearInterval(interval));
+            refreshIntervals = [];
+        }
+
+        function showError(elementId, message) {
+            const errorEl = document.getElementById(elementId);
+            errorEl.textContent = message;
+            errorEl.classList.add('show');
+        }
+
+        function clearError(elementId) {
+            const errorEl = document.getElementById(elementId);
+            errorEl.classList.remove('show');
+            errorEl.textContent = '';
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function formatTime(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        // Close modal on background click
+        document.getElementById('customerModal').addEventListener('click', (e) => {
+            if (e.target.id === 'customerModal') {
+                e.target.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>

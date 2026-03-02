@@ -1810,6 +1810,145 @@ def admin_market_delete(listing_id):
     return {"status": "ok", "message": f"Listing {listing_id} removed"}
 
 
+# ── Admin Dashboard & API ─────────────────────────────────────────────────
+
+@app.route("/admin/dashboard")
+def admin_dashboard():
+    """Serve the admin dashboard HTML."""
+    dash_path = os.path.join(os.path.dirname(__file__), "admin.html")
+    if os.path.exists(dash_path):
+        with open(dash_path, "r") as f:
+            return Response(f.read(), mimetype="text/html")
+    return "Dashboard not found", 404
+
+
+@app.route("/admin/stats", methods=["GET"])
+def admin_stats():
+    """Overview statistics for the dashboard."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    try:
+        with usage_store._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            total_customers = conn.execute("SELECT COUNT(*) as c FROM customers").fetchone()["c"]
+            active_subs = conn.execute("SELECT COUNT(*) as c FROM subscriptions WHERE status='active'").fetchone()["c"]
+            total_revenue = conn.execute("SELECT COALESCE(SUM(amount_cents),0) as c FROM payments WHERE status='completed'").fetchone()["c"]
+            today = datetime.now(ZoneInfo(BUSINESS_TIMEZONE)).strftime("%Y-%m-%d")
+            calls_today = conn.execute("SELECT COUNT(*) as c FROM call_logs WHERE date(timestamp)=?", (today,)).fetchone()["c"]
+            recent_payments = [dict(r) for r in conn.execute(
+                "SELECT p.*, c.phone FROM payments p LEFT JOIN customers c ON p.customer_id=c.id ORDER BY p.created_at DESC LIMIT 5"
+            ).fetchall()]
+            recent_calls = [dict(r) for r in conn.execute(
+                "SELECT * FROM call_logs ORDER BY timestamp DESC LIMIT 5"
+            ).fetchall()]
+        return {
+            "total_customers": total_customers,
+            "active_subscriptions": active_subs,
+            "total_revenue_cents": total_revenue,
+            "calls_today": calls_today,
+            "recent_payments": recent_payments,
+            "recent_calls": recent_calls,
+        }
+    except Exception as e:
+        logger.error(f"Admin stats error: {e}")
+        return {"error": str(e)}, 500
+
+
+@app.route("/admin/customers", methods=["GET"])
+def admin_customers():
+    """List all customers with optional search."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    search = request.args.get("q", "").strip()
+    try:
+        with usage_store._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            if search:
+                rows = conn.execute(
+                    "SELECT * FROM customers WHERE phone LIKE ? OR first_name LIKE ? OR last_name LIKE ? ORDER BY created_at DESC",
+                    (f"%{search}%", f"%{search}%", f"%{search}%")
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM customers ORDER BY created_at DESC").fetchall()
+        return Response(json.dumps([dict(r) for r in rows], indent=2), mimetype="application/json")
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
+@app.route("/admin/subscriptions", methods=["GET"])
+def admin_subscriptions():
+    """List all subscriptions with customer info."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    plan = request.args.get("plan", "").strip()
+    status = request.args.get("status", "").strip()
+    try:
+        with usage_store._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            query = """SELECT s.*, c.phone, c.first_name, c.last_name
+                       FROM subscriptions s
+                       LEFT JOIN customers c ON s.customer_id=c.id
+                       WHERE 1=1"""
+            params = []
+            if plan:
+                query += " AND s.plan_tier=?"
+                params.append(plan)
+            if status:
+                query += " AND s.status=?"
+                params.append(status)
+            query += " ORDER BY s.created_at DESC"
+            rows = conn.execute(query, params).fetchall()
+        return Response(json.dumps([dict(r) for r in rows], indent=2), mimetype="application/json")
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
+@app.route("/admin/payments", methods=["GET"])
+def admin_payments():
+    """List all payments with customer info."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    status = request.args.get("status", "").strip()
+    try:
+        with usage_store._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            query = """SELECT p.*, c.phone, c.first_name, c.last_name
+                       FROM payments p
+                       LEFT JOIN customers c ON p.customer_id=c.id
+                       WHERE 1=1"""
+            params = []
+            if status:
+                query += " AND p.status=?"
+                params.append(status)
+            query += " ORDER BY p.created_at DESC"
+            rows = conn.execute(query, params).fetchall()
+        return Response(json.dumps([dict(r) for r in rows], indent=2), mimetype="application/json")
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
+@app.route("/admin/call-logs", methods=["GET"])
+def admin_call_logs():
+    """List recent call logs."""
+    err = require_admin(request)
+    if err:
+        return {"error": err}, 401
+    limit = int(request.args.get("limit", 100))
+    try:
+        with usage_store._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM call_logs ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return Response(json.dumps([dict(r) for r in rows], indent=2), mimetype="application/json")
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
 # ── Voice Payment System (Square Integration) ────────────────────────────
 # Global dict to store in-flight payment sessions (card details temporary)
 payment_sessions = {}
