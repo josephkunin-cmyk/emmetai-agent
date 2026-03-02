@@ -13,7 +13,8 @@ import hmac
 import re
 import time
 import uuid
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 from urllib.error import HTTPError
@@ -1267,16 +1268,63 @@ def voice():
         f"(used={used_today}/{total_limit}, free={FREE_DAILY_QUERIES}, paid={has_paid})"
     )
 
-    # Just the greeting — no quota info, no name asking
-    return Response(
-        twiml_listen(
-            SERVICE_GREETING,
-            action="/gather",
-            fallback_text="I didn't catch that. Please ask your question.",
-            redirect_url="/voice?returning=true",
-        ),
-        mimetype="text/xml"
+    # Show greeting + menu (ask question or manage subscription)
+    resp = VoiceResponse()
+    gather = Gather(
+        input="dtmf",
+        action="/voice-menu",
+        method="POST",
+        num_digits=1,
+        timeout=10,
     )
+    gather.say(
+        SERVICE_GREETING + " "
+        "Press 1 to ask a question, or 2 to manage your subscription.",
+        voice=VOICE_NAME,
+        language="en-US"
+    )
+    resp.append(gather)
+
+    # Fallback if no selection
+    resp.say("I didn't catch that. Please press 1 or 2.", voice=VOICE_NAME)
+    resp.redirect("/voice")
+
+    return Response(str(resp), mimetype="text/xml")
+
+
+@app.route("/voice-menu", methods=["POST"])
+def voice_menu():
+    """Route to question or subscription management."""
+    call_sid = request.form.get("CallSid", "unknown")
+    caller = request.form.get("From", "unknown")
+    selection = request.form.get("Digits", "")
+
+    # Store call metadata
+    call_metadata[call_sid] = {"from": caller_identity(call_sid, caller)}
+
+    if selection == "1":
+        # Ask a question
+        return Response(
+            twiml_listen(
+                "Go ahead, I'm listening.",
+                action="/gather",
+                fallback_text="I didn't catch that. Please ask your question.",
+                redirect_url="/voice?returning=true",
+            ),
+            mimetype="text/xml"
+        )
+    elif selection == "2":
+        # Manage subscription
+        phone = caller.lstrip("+")
+        return Response(
+            twiml_subscription_menu(phone),
+            mimetype="text/xml"
+        )
+    else:
+        resp = VoiceResponse()
+        resp.say("Invalid selection. Please press 1 or 2.", voice=VOICE_NAME)
+        resp.redirect("/voice")
+        return Response(str(resp), mimetype="text/xml")
 
 
 @app.route("/intro-name", methods=["GET", "POST"])
@@ -1707,6 +1755,614 @@ def admin_market_delete(listing_id):
         conn.execute("DELETE FROM marketplace_listings WHERE id=?", (listing_id,))
         conn.commit()
     return {"status": "ok", "message": f"Listing {listing_id} removed"}
+
+
+# ── Voice Payment System (Square Integration) ────────────────────────────
+# Global dict to store in-flight payment sessions (card details temporary)
+payment_sessions = {}
+
+def initialize_customer_database():
+    """Create customer & payment tables if they don't exist."""
+    try:
+        with usage_store._connect() as conn:
+            # Customers table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS customers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone TEXT UNIQUE NOT NULL,
+                    email TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    external_id TEXT UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_call_at TEXT,
+                    status TEXT DEFAULT 'active'
+                )
+            """)
+
+            # Subscriptions table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    customer_id INTEGER NOT NULL UNIQUE REFERENCES customers(id),
+                    plan_tier TEXT NOT NULL,
+                    plan_name TEXT,
+                    status TEXT DEFAULT 'active',
+                    started_at TEXT NOT NULL,
+                    renewal_date TEXT,
+                    canceled_at TEXT,
+                    cancel_reason TEXT,
+                    auto_renew INTEGER DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+            # Payments table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    customer_id INTEGER NOT NULL REFERENCES customers(id),
+                    subscription_id INTEGER REFERENCES subscriptions(id),
+                    amount_cents INTEGER NOT NULL,
+                    currency TEXT DEFAULT 'USD',
+                    order_id TEXT UNIQUE,
+                    payment_link_id TEXT UNIQUE,
+                    payment_link_url TEXT,
+                    source TEXT DEFAULT 'phone',
+                    status TEXT DEFAULT 'pending',
+                    paid_at TEXT,
+                    failed_at TEXT,
+                    failure_reason TEXT,
+                    refund_amount_cents INTEGER DEFAULT 0,
+                    refunded_at TEXT,
+                    refund_reason TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    next_retry_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+            conn.commit()
+            logger.info("✅ Customer database tables initialized")
+    except Exception as e:
+        logger.error(f"Error initializing customer DB: {e}")
+
+def get_or_create_customer(phone: str) -> dict:
+    """Get existing customer or create new one."""
+    try:
+        with usage_store._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM customers WHERE phone = ?",
+                (phone,)
+            ).fetchone()
+
+            if row:
+                return dict(row)
+
+            # Create new customer
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                "INSERT INTO customers (phone, created_at, updated_at) VALUES (?, ?, ?)",
+                (phone, now, now)
+            )
+            conn.commit()
+
+            row = conn.execute(
+                "SELECT * FROM customers WHERE phone = ?",
+                (phone,)
+            ).fetchone()
+            return dict(row) if row else {}
+    except Exception as e:
+        logger.error(f"Error getting/creating customer: {e}")
+        return {}
+
+def validate_card_number(card_num: str) -> bool:
+    """Validate card with Luhn algorithm."""
+    if not card_num.isdigit() or len(card_num) < 13 or len(card_num) > 19:
+        return False
+    total = 0
+    for i, digit in enumerate(card_num[::-1]):
+        n = int(digit)
+        if i % 2 == 1:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+def is_valid_expiration(month: str, year: str) -> bool:
+    """Check if card hasn't expired."""
+    try:
+        current = datetime.utcnow()
+        exp_date = datetime(int(year), int(month), 1)
+        exp_date = exp_date.replace(day=1) + timedelta(days=32)
+        return exp_date > current
+    except:
+        return False
+
+def detect_card_type(card_num: str) -> str:
+    """Detect card type from card number."""
+    if card_num.startswith("4"):
+        return "Visa"
+    elif card_num.startswith("5"):
+        return "Mastercard"
+    elif card_num.startswith("3"):
+        return "Amex"
+    elif card_num.startswith("6"):
+        return "Discover"
+    else:
+        return "Unknown"
+
+def charge_card_square(card_number: str, exp_month: str, exp_year: str,
+                      cvv: str, amount_cents: int, customer_phone: str, plan: str) -> dict:
+    """Charge card via Square Payment Intents API."""
+    try:
+        import requests
+
+        headers = {
+            "Authorization": f"Bearer {SQUARE_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+            "Square-Version": SQUARE_API_VERSION,
+        }
+
+        # Create/get customer
+        customer = get_or_create_customer(customer_phone)
+        if not customer.get("id"):
+            return {"success": False, "error": "Could not create customer"}
+
+        # Create payment
+        payment_body = {
+            "idempotency_key": str(uuid.uuid4()),
+            "amount_money": {
+                "amount": amount_cents,
+                "currency": SQUARE_CURRENCY,
+            },
+            "payment_source_details": {
+                "card_details": {
+                    "card": {
+                        "card_number": card_number,
+                        "expiration_month": int(exp_month),
+                        "expiration_year": int(exp_year),
+                        "cvc": cvv,
+                    }
+                }
+            },
+            "receipt_number": f"emmet-{customer_phone}-{int(time.time())}",
+            "note": f"Subscription: {plan}",
+        }
+
+        payment_response = requests.post(
+            "https://connect.squareup.com/v2/payments",
+            json=payment_body,
+            headers=headers,
+            timeout=10,
+        ).json()
+
+        if "error" in payment_response:
+            error_msg = payment_response["error"].get("message", "Unknown error")
+            logger.error(f"Square payment error: {error_msg}")
+            return {"success": False, "error": error_msg}
+
+        payment_id = payment_response["payment"]["id"]
+
+        # Create subscription in DB
+        now = datetime.utcnow().isoformat()
+        renewal_date = (datetime.utcnow() + timedelta(days=30)).isoformat()
+
+        plans = {
+            "paid_9": ("Basic", 999),
+            "paid_29": ("Professional", 2999),
+            "paid_59": ("Enterprise", 5999),
+        }
+
+        plan_name, _ = plans.get(plan, ("Premium", amount_cents))
+
+        with usage_store._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO subscriptions
+                (customer_id, plan_tier, plan_name, status, started_at,
+                 renewal_date, created_at, updated_at)
+                VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
+                """,
+                (customer["id"], plan, plan_name, now, renewal_date, now, now)
+            )
+
+            conn.execute(
+                """
+                INSERT INTO payments
+                (customer_id, amount_cents, order_id, status, paid_at, created_at, updated_at)
+                VALUES (?, ?, ?, 'completed', ?, ?, ?)
+                """,
+                (customer["id"], amount_cents, payment_id, now, now, now)
+            )
+
+            conn.commit()
+
+        # Send SMS confirmation
+        send_sms(
+            customer_phone,
+            f"✅ Subscription confirmed! Charged ${amount_cents / 100:.2f} for "
+            f"{plan_name} plan. Next billing: {renewal_date[:10]}. "
+            f"Call (717) 922-5968 to manage."
+        )
+
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "plan_name": plan_name,
+            "amount": amount_cents / 100,
+        }
+
+    except Exception as e:
+        logger.error(f"Error charging card: {e}")
+        return {"success": False, "error": str(e)}
+
+# Voice Payment TwiML Endpoints
+
+def twiml_subscription_menu(phone: str) -> str:
+    """Show subscription plan options."""
+    resp = VoiceResponse()
+    gather = Gather(
+        input="dtmf",
+        action=f"/gather-plan-selection?phone={phone}",
+        method="POST",
+        num_digits=1,
+        timeout=10,
+    )
+    gather.say(
+        "Choose a plan. Press 1 for Basic: four questions daily for nine dollars ninety-nine per month. "
+        "Press 2 for Professional: unlimited questions for twenty-nine dollars ninety-nine per month. "
+        "Press 3 for Enterprise: unlimited with priority for fifty-nine dollars ninety-nine per month. "
+        "Press 0 to go back.",
+        voice=VOICE_NAME,
+        language="en-US"
+    )
+    resp.append(gather)
+    resp.say("Sorry, I didn't catch that.", voice=VOICE_NAME)
+    resp.redirect("/subscribe-menu?phone=" + phone)
+    return str(resp)
+
+@app.route("/subscribe-menu", methods=["GET", "POST"])
+def subscribe_menu():
+    """Show subscription menu."""
+    phone = request.args.get("phone", request.form.get("From", "unknown"))
+    call_sid = request.form.get("CallSid", "unknown")
+    call_metadata[call_sid] = {"from": phone}
+    return Response(twiml_subscription_menu(phone), mimetype="text/xml")
+
+@app.route("/gather-plan-selection", methods=["POST"])
+def gather_plan_selection():
+    """Handle plan selection."""
+    phone = request.args.get("phone", "unknown")
+    selection = request.form.get("Digits", "")
+
+    plans = {
+        "1": {"tier": "paid_9", "name": "Basic", "price_cents": 999},
+        "2": {"tier": "paid_29", "name": "Professional", "price_cents": 2999},
+        "3": {"tier": "paid_59", "name": "Enterprise", "price_cents": 5999},
+    }
+
+    if selection not in plans:
+        return Response(
+            twiml_say("Invalid selection. Please try again.") +
+            twiml_listen("Press 1, 2, or 3 to select a plan.", action="/subscribe-menu?phone=" + phone),
+            mimetype="text/xml"
+        )
+
+    plan = plans[selection]
+
+    resp = VoiceResponse()
+    gather = Gather(
+        input="dtmf",
+        action=f"/gather-payment-method?phone={phone}&plan={plan['tier']}&amount={plan['price_cents']}",
+        method="POST",
+        num_digits=1,
+        timeout=10,
+    )
+    gather.say(
+        f"You selected {plan['name']} for ${plan['price_cents']/100:.2f} per month. "
+        "How would you like to pay? Press 1 for credit card over the phone, "
+        "or press 2 to receive a payment link via text.",
+        voice=VOICE_NAME,
+        language="en-US"
+    )
+    resp.append(gather)
+    resp.say("I didn't catch that. Please try again.", voice=VOICE_NAME)
+    resp.redirect(f"/gather-plan-selection?phone={phone}")
+    return Response(str(resp), mimetype="text/xml")
+
+@app.route("/gather-payment-method", methods=["POST"])
+def gather_payment_method():
+    """Route to voice or SMS payment."""
+    phone = request.args.get("phone", "unknown")
+    plan = request.args.get("plan", "paid_9")
+    amount = int(request.args.get("amount", 999))
+    selection = request.form.get("Digits", "")
+
+    if selection == "1":
+        # Collect card number
+        resp = VoiceResponse()
+        gather = Gather(
+            input="dtmf",
+            action=f"/process-card-number?phone={phone}&plan={plan}&amount={amount}",
+            method="POST",
+            num_digits=19,
+            timeout=15,
+            finish_on_key="#",
+        )
+        gather.say(
+            "Please enter your credit card number, then press the pound key.",
+            voice=VOICE_NAME,
+            language="en-US"
+        )
+        resp.append(gather)
+        resp.say("I didn't receive a card number. Please try again.", voice=VOICE_NAME)
+        resp.redirect(f"/gather-payment-method?phone={phone}&plan={plan}&amount={amount}")
+        return Response(str(resp), mimetype="text/xml")
+
+    elif selection == "2":
+        # Send SMS link
+        return Response(
+            twiml_send_payment_link(phone, plan, amount),
+            mimetype="text/xml"
+        )
+    else:
+        resp = VoiceResponse()
+        resp.say("Invalid selection. Please try again.", voice=VOICE_NAME)
+        resp.redirect(f"/gather-plan-selection?phone={phone}")
+        return Response(str(resp), mimetype="text/xml")
+
+@app.route("/process-card-number", methods=["POST"])
+def process_card_number():
+    """Process card number, ask for expiration."""
+    phone = request.args.get("phone", "unknown")
+    plan = request.args.get("plan", "paid_9")
+    amount = int(request.args.get("amount", 999))
+    card_number = request.form.get("Digits", "").replace("#", "").strip()
+
+    if not validate_card_number(card_number):
+        resp = VoiceResponse()
+        resp.say(
+            "That doesn't look like a valid card number. Please check and try again.",
+            voice=VOICE_NAME
+        )
+        resp.redirect(f"/gather-payment-method?phone={phone}&plan={plan}&amount={amount}")
+        return Response(str(resp), mimetype="text/xml")
+
+    session_key = f"payment_{phone}_{int(time.time())}"
+    payment_sessions[session_key] = {
+        "phone": phone,
+        "plan": plan,
+        "amount": amount,
+        "card_number": card_number,
+        "card_last4": card_number[-4:],
+        "card_type": detect_card_type(card_number),
+        "created_at": time.time(),
+    }
+
+    resp = VoiceResponse()
+    gather = Gather(
+        input="dtmf",
+        action=f"/process-card-expiration?session={session_key}",
+        method="POST",
+        num_digits=4,
+        timeout=10,
+        finish_on_key="#",
+    )
+    gather.say(
+        f"Thank you. Card ending in {card_number[-4:]}. "
+        "Now enter the expiration month and year (M M Y Y), then press pound. "
+        "For example, for December 2027, enter 1 2 2 7 and press pound.",
+        voice=VOICE_NAME,
+        language="en-US"
+    )
+    resp.append(gather)
+    resp.say("I didn't receive the expiration date. Please try again.", voice=VOICE_NAME)
+    resp.redirect(f"/gather-payment-method?phone={phone}&plan={plan}&amount={amount}")
+    return Response(str(resp), mimetype="text/xml")
+
+@app.route("/process-card-expiration", methods=["POST"])
+def process_card_expiration():
+    """Process expiration, ask for CVV."""
+    session_key = request.args.get("session")
+    expiration = request.form.get("Digits", "").replace("#", "").strip()
+
+    if session_key not in payment_sessions:
+        resp = VoiceResponse()
+        resp.say("Your session expired. Please call back and try again.", voice=VOICE_NAME)
+        resp.hangup()
+        return Response(str(resp), mimetype="text/xml")
+
+    session = payment_sessions[session_key]
+
+    if len(expiration) != 4 or not expiration.isdigit():
+        resp = VoiceResponse()
+        resp.say("That doesn't look valid. Please enter M M Y Y.", voice=VOICE_NAME)
+        resp.redirect(f"/gather-payment-method?phone={session['phone']}&plan={session['plan']}&amount={session['amount']}")
+        return Response(str(resp), mimetype="text/xml")
+
+    month = expiration[:2]
+    year = "20" + expiration[2:]
+
+    if not is_valid_expiration(month, year):
+        resp = VoiceResponse()
+        resp.say("That expiration date has passed. Please check your card and try again.", voice=VOICE_NAME)
+        resp.redirect(f"/gather-payment-method?phone={session['phone']}&plan={session['plan']}&amount={session['amount']}")
+        return Response(str(resp), mimetype="text/xml")
+
+    payment_sessions[session_key]["exp_month"] = month
+    payment_sessions[session_key]["exp_year"] = year
+
+    resp = VoiceResponse()
+    gather = Gather(
+        input="dtmf",
+        action=f"/process-card-cvv?session={session_key}",
+        method="POST",
+        num_digits=4,
+        timeout=10,
+        finish_on_key="#",
+    )
+    gather.say(
+        f"Expiration: {month}/{year}. "
+        "Now enter the 3-digit security code on the back of your card, then press pound.",
+        voice=VOICE_NAME,
+        language="en-US"
+    )
+    resp.append(gather)
+    resp.say("I didn't receive the security code. Please try again.", voice=VOICE_NAME)
+    resp.redirect(f"/gather-payment-method?phone={session['phone']}&plan={session['plan']}&amount={session['amount']}")
+    return Response(str(resp), mimetype="text/xml")
+
+@app.route("/process-card-cvv", methods=["POST"])
+def process_card_cvv():
+    """Charge card via Square."""
+    session_key = request.args.get("session")
+    cvv = request.form.get("Digits", "").replace("#", "").strip()
+
+    if session_key not in payment_sessions:
+        resp = VoiceResponse()
+        resp.say("Your session expired. Please call back.", voice=VOICE_NAME)
+        resp.hangup()
+        return Response(str(resp), mimetype="text/xml")
+
+    session = payment_sessions[session_key]
+
+    if len(cvv) < 3 or len(cvv) > 4 or not cvv.isdigit():
+        resp = VoiceResponse()
+        resp.say("That doesn't look like a valid security code. Please call back to try again.", voice=VOICE_NAME)
+        resp.hangup()
+        return Response(str(resp), mimetype="text/xml")
+
+    # Charge card
+    charge_result = charge_card_square(
+        card_number=session["card_number"],
+        exp_month=session["exp_month"],
+        exp_year=session["exp_year"],
+        cvv=cvv,
+        amount_cents=session["amount"],
+        customer_phone=session["phone"],
+        plan=session["plan"]
+    )
+
+    # Clean up session
+    if session_key in payment_sessions:
+        del payment_sessions[session_key]
+
+    if not charge_result["success"]:
+        resp = VoiceResponse()
+        resp.say(
+            f"Unfortunately, your card was declined. Your card has not been charged. "
+            "I can send you a payment link via text to try a different card. "
+            "To receive a link, press 1. Otherwise, just hang up and call back later.",
+            voice=VOICE_NAME
+        )
+        gather = Gather(
+            input="dtmf",
+            action=f"/fallback-sms-link?phone={session['phone']}&plan={session['plan']}&amount={session['amount']}",
+            method="POST",
+            num_digits=1,
+            timeout=10,
+        )
+        gather.say("Press 1 for SMS link, or hang up.", voice=VOICE_NAME)
+        resp.append(gather)
+        resp.hangup()
+        return Response(str(resp), mimetype="text/xml")
+
+    # SUCCESS
+    resp = VoiceResponse()
+    resp.say(
+        f"Success! Your card ending in {session['card_last4']} has been charged "
+        f"${session['amount'] / 100:.2f}. Your subscription is now active. "
+        "You will be automatically charged on the same date each month. "
+        "A confirmation text has been sent to your phone. Thank you!",
+        voice=VOICE_NAME
+    )
+    resp.hangup()
+    return Response(str(resp), mimetype="text/xml")
+
+def twiml_send_payment_link(phone: str, plan: str, amount: int) -> str:
+    """Send Square payment link via SMS."""
+    try:
+        import requests
+
+        plans_info = {
+            "paid_9": {"name": "Basic - $9.99/month", "amount": 999},
+            "paid_29": {"name": "Professional - $29.99/month", "amount": 2999},
+            "paid_59": {"name": "Enterprise - $59.99/month", "amount": 5999},
+        }
+
+        plan_details = plans_info.get(plan, {"name": "Subscription", "amount": amount})
+
+        headers = {
+            "Authorization": f"Bearer {SQUARE_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+            "Square-Version": SQUARE_API_VERSION,
+        }
+
+        link_body = {
+            "idempotency_key": str(uuid.uuid4()),
+            "quick_pay": {
+                "name": plan_details["name"],
+                "price_money": {
+                    "amount": plan_details["amount"],
+                    "currency": SQUARE_CURRENCY,
+                },
+            },
+        }
+
+        link_response = requests.post(
+            "https://connect.squareup.com/v2/checkout/payment-links",
+            json=link_body,
+            headers=headers,
+            timeout=10,
+        ).json()
+
+        payment_link_url = link_response.get("payment_link", {}).get("url")
+
+        if not payment_link_url:
+            resp = VoiceResponse()
+            resp.say("I'm having trouble generating a link. Visit emmetai.com to subscribe.", voice=VOICE_NAME)
+            resp.hangup()
+            return str(resp)
+
+        send_sms(
+            phone,
+            f"Pay for {plan_details['name']}: {payment_link_url} (Link expires in 30 min)"
+        )
+
+        resp = VoiceResponse()
+        resp.say(
+            f"Perfect! I've sent you a text with a payment link for {plan_details['name']}. "
+            "Click the link to finish paying. Thank you!",
+            voice=VOICE_NAME
+        )
+        resp.hangup()
+        return str(resp)
+
+    except Exception as e:
+        logger.error(f"Error sending SMS link: {e}")
+        resp = VoiceResponse()
+        resp.say("I'm having trouble. Please try again later or visit emmetai.com.", voice=VOICE_NAME)
+        resp.hangup()
+        return str(resp)
+
+@app.route("/fallback-sms-link", methods=["POST"])
+def fallback_sms_link():
+    """Fallback to SMS if voice payment fails."""
+    phone = request.args.get("phone", "unknown")
+    plan = request.args.get("plan", "paid_9")
+    amount = int(request.args.get("amount", 999))
+    return Response(
+        twiml_send_payment_link(phone, plan, amount),
+        mimetype="text/xml"
+    )
+
+# Initialize customer database on startup
+initialize_customer_database()
 
 
 # ── Entry Point ──────────────────────────────────────────────────────────
