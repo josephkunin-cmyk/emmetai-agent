@@ -14,6 +14,7 @@ import re
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -69,9 +70,7 @@ SERVICE_SCOPE_MESSAGE = env_text(
 SERVICE_GREETING = env_text(
     "SERVICE_GREETING",
     (
-        "Welcome to Emmet AI. I'm here to answer your homestead and farming questions. "
-        "You get four free questions today. After that, a small payment unlocks four more. "
-        "What's your question?"
+        "This is Emmet AI. I can answer your questions about farming and homesteading. Ask away."
     ),
 )
 VOICE_NAME = env_text("VOICE_NAME", "Polly.Joanna")
@@ -818,6 +817,57 @@ def twiml_say(text: str) -> str:
     return str(resp)
 
 
+# ── Conversation Export to Excel ──────────────────────────────────────────
+def export_call_to_spreadsheet(caller_phone: str, caller_name: str, usage_date: str, questions_asked: list, paid_status: bool) -> None:
+    """Export a completed call to an Excel spreadsheet on the user's computer."""
+    try:
+        from openpyxl import load_workbook, Workbook
+
+        # Determine export path: ~/Downloads/emmet-conversations.xlsx
+        export_path = Path.home() / "Downloads" / "emmet-conversations.xlsx"
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load or create workbook
+        if export_path.exists():
+            wb = load_workbook(export_path)
+            ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Conversations"
+            # Add headers
+            headers = ["Date", "Phone", "Name", "Questions Asked", "Paid Access", "Q1", "A1", "Q2", "A2", "Q3", "A3", "Q4", "A4", "Q5", "A5", "Q6", "A6", "Q7", "A7", "Q8", "A8"]
+            ws.append(headers)
+
+        # Prepare row data
+        row_data = [
+            datetime.utcnow().isoformat(),
+            caller_phone,
+            caller_name or "(not captured)",
+            len(questions_asked),
+            "Yes" if paid_status else "No"
+        ]
+
+        # Add Q&A pairs (up to 8 questions)
+        for i in range(8):
+            if i < len(questions_asked):
+                q, a = questions_asked[i]
+                row_data.append(q[:100])  # Truncate long questions
+                row_data.append(a[:100])  # Truncate long answers
+            else:
+                row_data.append("")
+                row_data.append("")
+
+        # Append row to spreadsheet
+        ws.append(row_data)
+
+        # Save workbook
+        wb.save(export_path)
+        logger.info(f"✅ Call exported to {export_path}")
+    except Exception as e:
+        logger.error(f"Failed to export to spreadsheet: {e}")
+
+
 # ── Routes ───────────────────────────────────────────────────────────────
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
@@ -1119,14 +1169,41 @@ def gather():
 
 @app.route("/status", methods=["GET", "POST"])
 def status():
-    """Call status webhook — clean up conversation when call ends."""
+    """Call status webhook — clean up conversation and export to spreadsheet when call ends."""
     call_sid = request.form.get("CallSid", "")
     call_status = request.form.get("CallStatus", "")
+    caller_from = request.form.get("From", "")
 
     if call_status in ("completed", "failed", "busy", "no-answer"):
         meta = call_metadata.pop(call_sid, {})
-        conversations.pop(call_sid, None)
-        if meta:
+        history = conversations.pop(call_sid, None)
+        usage_date = business_today_iso()
+
+        if meta and call_status == "completed" and history:
+            caller_id = caller_identity(call_sid, caller_from)
+            caller_name = usage_store.get_caller_name(caller_id)
+            has_paid = usage_store.has_paid_access(caller_id, usage_date)
+
+            # Extract Q&A from conversation history
+            questions_asked = []
+            for msg in history:
+                if msg["role"] == "user":
+                    question = msg["content"]
+                    # Find the corresponding answer
+                    idx = history.index(msg)
+                    answer = ""
+                    if idx + 1 < len(history) and history[idx + 1]["role"] == "assistant":
+                        answer = history[idx + 1]["content"]
+                    questions_asked.append((question, answer))
+
+            # Export to spreadsheet
+            export_call_to_spreadsheet(caller_id, caller_name, usage_date, questions_asked, has_paid)
+
+            logger.info(
+                f"[{call_sid[:8]}] Call ended ({call_status}) — "
+                f"{len(questions_asked)} Q&A, exported to spreadsheet"
+            )
+        elif meta:
             logger.info(
                 f"[{call_sid[:8]}] Call ended ({call_status}) — "
                 f"{meta.get('turns', 0)} turns"
