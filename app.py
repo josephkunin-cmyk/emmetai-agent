@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from flask import Flask, request, Response
@@ -389,6 +389,9 @@ app = Flask(__name__)
 anthropic_client = None
 usage_store = UsageStore(DB_PATH)
 
+# Initialize farming knowledge database on startup
+initialize_farming_knowledge_db()
+
 # In-memory conversation store keyed by Twilio CallSid
 conversations = {}
 call_metadata = {}
@@ -684,6 +687,271 @@ def format_marketplace_for_prompt() -> str:
         return ""
 
 
+# ── Farming Knowledge Database ──────────────────────────────────────────────
+FARMING_KNOWLEDGE_DB = os.path.join(os.path.dirname(__file__), "farming_knowledge.db")
+
+def initialize_farming_knowledge_db():
+    """Initialize farming knowledge database with seed data."""
+    try:
+        # Only initialize if not already done
+        if os.path.exists(FARMING_KNOWLEDGE_DB):
+            return
+
+        conn = sqlite3.connect(FARMING_KNOWLEDGE_DB)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Create tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                topic TEXT,
+                content TEXT NOT NULL,
+                source TEXT DEFAULT 'seed-data',
+                added_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        # Seed data for farming knowledge base
+        farming_knowledge_base = {
+            "weather_&_seasons": [
+                {
+                    "topic": "Frost dates",
+                    "region": "Lancaster County PA",
+                    "content": "Last spring frost: ~May 10. First fall frost: ~October 1. Growing season: ~144 days."
+                },
+                {
+                    "topic": "Planting calendar",
+                    "month": "March",
+                    "content": "Start seeds indoors: tomatoes, peppers, eggplant. Direct sow: peas, spinach, lettuce, kale."
+                },
+                {
+                    "topic": "Planting calendar",
+                    "month": "April",
+                    "content": "Plant: asparagus, rhubarb, garlic. Direct sow: carrots, beets, beans, corn after last frost date."
+                },
+                {
+                    "topic": "Planting calendar",
+                    "month": "May",
+                    "content": "Transplant: tomatoes, peppers, eggplant after last frost. Direct sow: beans, corn, squash, cucumbers."
+                }
+            ],
+            "crops": [
+                {
+                    "crop": "Tomatoes",
+                    "spacing": "24-36 inches apart",
+                    "days_to_harvest": "60-85 days",
+                    "sunlight": "6-8 hours minimum",
+                    "tips": "Use cages or stakes. Prune suckers for better fruit. Rotate crops yearly."
+                },
+                {
+                    "crop": "Corn",
+                    "spacing": "8-12 inches apart, rows 30 inches",
+                    "days_to_harvest": "60-100 days depending on variety",
+                    "sunlight": "Full sun (6+ hours)",
+                    "tips": "Plant in blocks for good pollination. Water deeply. Harvest when silks brown."
+                },
+                {
+                    "crop": "Beans",
+                    "spacing": "4-6 inches apart",
+                    "days_to_harvest": "50-60 days",
+                    "sunlight": "6+ hours",
+                    "tips": "Don't soak seeds. Plant after last frost. Bush beans faster than pole."
+                },
+                {
+                    "crop": "Potatoes",
+                    "spacing": "12 inches apart, rows 3 feet",
+                    "days_to_harvest": "70-120 days",
+                    "sunlight": "6+ hours",
+                    "tips": "Plant seed potatoes 2-4 inches deep. Hill soil around plants as they grow."
+                }
+            ],
+            "livestock": [
+                {
+                    "animal": "Chickens",
+                    "space_per_bird": "3-4 sq ft indoor, 8-10 sq ft outdoor",
+                    "feed": "~0.25 lb per day (layer feed)",
+                    "water": "Continuous access. ~1 cup per day.",
+                    "tips": "Provide ventilation not drafts. Predator-proof coop essential. Expect 5-6 eggs/week per hen."
+                },
+                {
+                    "animal": "Goats",
+                    "space_per_animal": "200+ sq ft pasture per goat",
+                    "feed": "2-3% of body weight daily (hay + grain)",
+                    "water": "~1 gallon per day per 100 lbs",
+                    "tips": "Goats are escape artists. Strong fencing needed. Can eat brush and weeds."
+                },
+                {
+                    "animal": "Horses",
+                    "space_per_animal": "1-2 acres per horse",
+                    "feed": "1.5-2% of body weight daily (hay + grain)",
+                    "water": "5-10 gallons per day",
+                    "tips": "Require shelter, regular farrier care (8-10 weeks), dental care, vaccines."
+                },
+                {
+                    "animal": "Pigs",
+                    "space_per_animal": "50 sq ft per pig (minimum)",
+                    "feed": "3-6 lbs per day depending on size/stage",
+                    "water": "Continuous access, 1-2 gallons per day",
+                    "tips": "Provide mud wallow or shade. Good for clearing land. 6-12 month grow-out."
+                }
+            ],
+            "soil_care": [
+                {
+                    "practice": "Crop rotation",
+                    "description": "Don't plant same crop family in same spot 2 years running",
+                    "benefit": "Prevents disease buildup, improves soil",
+                    "timeline": "Rotate every 1-2 years"
+                },
+                {
+                    "practice": "Cover cropping",
+                    "description": "Plant clover, alfalfa, rye in off-season",
+                    "benefit": "Fixes nitrogen, prevents erosion, adds organic matter",
+                    "timeline": "Plant fall, till in spring"
+                },
+                {
+                    "practice": "Composting",
+                    "description": "Kitchen scraps + yard waste → black gold",
+                    "benefit": "Rich in nutrients. Improves soil structure. Saves money.",
+                    "timeline": "3-12 months depending on method"
+                }
+            ],
+            "food_preservation": [
+                {
+                    "method": "Canning",
+                    "foods": "Tomatoes, salsa, jams, pickles, beans",
+                    "shelf_life": "1-2 years",
+                    "equipment": "Canner, jars, lids, pectin for jams",
+                    "safety": "Follow USDA guidelines. Use pressure canner for low-acid foods."
+                },
+                {
+                    "method": "Freezing",
+                    "foods": "Vegetables, fruits, herbs, prepared meals",
+                    "shelf_life": "6-12 months",
+                    "equipment": "Freezer, freezer bags, vacuum sealer (optional)",
+                    "tips": "Blanch vegetables first. Label with date. Store at 0°F."
+                },
+                {
+                    "method": "Root cellar storage",
+                    "foods": "Potatoes, onions, apples, squash, carrots",
+                    "shelf_life": "2-6 months depending on crop",
+                    "conditions": "Cool (32-50°F), dark, humid (90%+)",
+                    "tips": "Store away from ethylene-producing fruits (apples)."
+                },
+                {
+                    "method": "Dehydrating",
+                    "foods": "Herbs, peppers, tomatoes, apples, jerky",
+                    "shelf_life": "6-12 months",
+                    "equipment": "Dehydrator or oven on low",
+                    "tips": "Store in airtight containers. Use oxygen absorbers for long-term."
+                }
+            ],
+            "tools_equipment": [
+                {
+                    "tool": "Hoe",
+                    "use": "Weeding, breaking soil, making rows",
+                    "types": "Standard, warren (pointed), warren/push combo"
+                },
+                {
+                    "tool": "Tiller",
+                    "use": "Breaking ground, prepping beds, mixing soil",
+                    "types": "Front-tine (small), rear-tine (large), mini tillers"
+                },
+                {
+                    "tool": "Shovel vs Spade",
+                    "use": "Shovel: moving loose material. Spade: digging, edging.",
+                    "types": "Long handle vs D-handle"
+                }
+            ]
+        }
+
+        # Populate with seed data
+        now = datetime.utcnow().isoformat()
+        for category, items in farming_knowledge_base.items():
+            for item in items:
+                content = json.dumps(item)
+                topic = item.get("topic") or item.get("crop") or item.get("animal") or item.get("method") or item.get("tool") or item.get("practice")
+                cursor.execute(
+                    "INSERT INTO knowledge (category, topic, content, added_at, updated_at) VALUES (?,?,?,?,?)",
+                    (category, topic, content, now, now)
+                )
+
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ Farming knowledge database initialized at {FARMING_KNOWLEDGE_DB}")
+    except Exception as e:
+        logger.error(f"Error initializing farming knowledge DB: {e}")
+
+
+def search_farming_knowledge(query: str, limit: int = 3) -> List[Dict]:
+    """Search farming knowledge database for relevant information."""
+    try:
+        if not os.path.exists(FARMING_KNOWLEDGE_DB):
+            return []
+
+        conn = sqlite3.connect(FARMING_KNOWLEDGE_DB)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        query_lower = query.lower()
+
+        # Search in content and topic
+        cursor.execute("""
+            SELECT topic, content, category FROM knowledge
+            WHERE content LIKE ? OR topic LIKE ?
+            LIMIT ?
+        """, (f"%{query_lower}%", f"%{query_lower}%", limit))
+
+        results = []
+        for row in cursor.fetchall():
+            try:
+                content_obj = json.loads(row["content"])
+                results.append({
+                    "topic": row["topic"],
+                    "category": row["category"],
+                    "content": content_obj
+                })
+            except json.JSONDecodeError:
+                results.append({
+                    "topic": row["topic"],
+                    "category": row["category"],
+                    "content": row["content"]
+                })
+
+        conn.close()
+        return results
+    except Exception as e:
+        logger.error(f"Error searching farming knowledge: {e}")
+        return []
+
+
+def format_farming_knowledge_for_prompt(user_message: str) -> str:
+    """Format farming knowledge search results for inclusion in system prompt."""
+    try:
+        results = search_farming_knowledge(user_message, limit=3)
+        if not results:
+            return ""
+
+        lines = ["RELEVANT FARMING & HOMESTEADING KNOWLEDGE:"]
+        for r in results:
+            lines.append(f"\n{r['topic']} ({r['category']}):")
+            content = r["content"]
+            if isinstance(content, dict):
+                # Format dict content nicely
+                for key, val in content.items():
+                    if key not in ["topic", "crop", "animal", "method", "tool", "practice"]:
+                        lines.append(f"  {key.replace('_', ' ').title()}: {val}")
+            else:
+                lines.append(f"  {content}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error formatting farming knowledge: {e}")
+        return ""
+
+
 def build_system_prompt():
     """Build the full system prompt including knowledge base."""
     base_prompt = """You are Emmet, a friendly and practical AI phone assistant for Banyan Communications.
@@ -748,6 +1016,15 @@ def ask_claude(call_sid: str, user_message: str) -> str:
 
     t0 = time.monotonic()
 
+    # Build system prompt with base knowledge + farming-specific knowledge for this question
+    base_system = build_system_prompt()
+    farming_knowledge = format_farming_knowledge_for_prompt(user_message)
+
+    if farming_knowledge:
+        system_prompt_text = f"{base_system}\n\n{farming_knowledge}"
+    else:
+        system_prompt_text = base_system
+
     # Use prompt caching on the system prompt — cuts repeat-call latency ~60%
     response = get_anthropic_client().messages.create(
         model="claude-haiku-4-5-20251001",   # 3-5x faster than Sonnet
@@ -755,7 +1032,7 @@ def ask_claude(call_sid: str, user_message: str) -> str:
         system=[
             {
                 "type": "text",
-                "text": build_system_prompt(),
+                "text": system_prompt_text,
                 "cache_control": {"type": "ephemeral"},   # cache the prompt
             }
         ],
